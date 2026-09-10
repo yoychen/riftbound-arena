@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="theme-color" content="#101f24"><meta name="description" content="裂境：四位英雄、隨機進化、護送攻城巨獸。每局不同的 3D 動作 MOBA。"><title>裂境 RIFTBOUND｜英雄競技場</title><link rel="stylesheet" href="style.css"></head><body>
+<main id="game"><canvas id="world" aria-label="3D 競技場"></canvas><canvas id="labels"></canvas>
+<header class="topbar"><div class="brand"><span class="sigil">✧</span><div>裂境 <small>RIFTBOUND</small></div><span class="tag">英雄競技場</span></div><div id="score"><b class="blue">0</b><span>VS</span><b class="red">0</b><i></i><time>00:00</time></div><div class="top-actions"><button id="sound" title="切換音效" aria-label="切換音效">♫ 音效</button><button id="pause" title="暫停 Esc">Ⅱ</button></div></header>
+<section class="objective panel"><span class="eyebrow">戰場目標</span><h3 id="objectiveTitle">摧毀敵方核心</h3><p id="objectiveText">跟隨兵線推進，攻破任一路防禦塔。</p><div class="boss-line"><span class="boss-icon">◈</span><div><b id="bossTitle">熔岩龜甦醒</b><small id="bossTime">03:00</small></div></div></section>
+<div id="feed"></div><div id="toast" role="status"></div><div id="respawn"></div>
+<aside class="map-panel panel"><div class="map-title"><span>裂境森林</span><span id="phase">雙線戰場</span></div><canvas id="minimap" width="210" height="168" aria-label="小地圖，點擊可呼叫隊友"></canvas><p><kbd>G</kbd> 集合　<span>● 我方</span>　<span class="red">● 敵方</span></p></aside>
+<div id="evolutions"></div>
+<footer id="hud" class="panel"><div class="hero-info"><div id="heroBadge">⚔</div><div><b id="heroName">逐風劍士</b><small id="level">LV. 1</small><div class="health"><div id="healthFill"></div></div><span id="healthText">980 / 980</span></div></div><div class="skills" id="skills"></div><div class="economy"><b id="gold">◈ 0</b><button id="shopButton">裝備 <kbd>B</kbd></button></div></footer>
+<div class="control-hint"><span><kbd>W A S D</kbd> 移動</span><span><kbd>滑鼠</kbd> 瞄準／按住普攻</span><span><kbd>空白鍵</kbd> 閃避</span><span><kbd>G</kbd> 集合</span></div>
+<div id="touchMove" aria-label="移動搖桿"><i></i></div><button id="touchAttack">普攻</button>
+<div id="overlay" class="overlay"></div>
+</main><script type="module" src="game.js"></script></body></html>
