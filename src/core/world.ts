@@ -9,6 +9,7 @@
  * 它們是呈現層的東西，模擬不該知道它們存在。
  */
 
+import { createEventQueue, type EventQueue } from "./events.js";
 import type { Point } from "./vec.js";
 
 /**
@@ -52,6 +53,12 @@ export interface Ping extends Point {
 }
 
 export interface World {
+  /**
+   * 模擬產生的副作用。特效、音效、提示都描述成事件推進這裡，
+   * 由呈現層每幀取用 —— 是模擬的「輸出」，不是呈現層狀態。
+   */
+  events: EventQueue;
+
   entities: Entity[];
   projectiles: Projectile[];
   zones: Zone[];
@@ -87,6 +94,8 @@ export interface World {
 
 export function createWorld(): World {
   return {
+    events: createEventQueue(),
+
     entities: [],
     projectiles: [],
     zones: [],
