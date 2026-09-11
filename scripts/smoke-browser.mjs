@@ -53,24 +53,40 @@ check("WebGL canvas 已配置", select.canvas);
 await page.click("#start");
 await page.waitForFunction(() => document.getElementById("skills").children.length === 4, { timeout: 10000 });
 
+// 進場的 announce 走的是副作用佇列：邏輯發事件 → drain → 寫 DOM。
+// 提示會在 3.4 秒後自動隱藏，所以趁進場當下就取樣。
+const toast = await page.evaluate(() => {
+  const el = document.getElementById("toast");
+  return { shown: el.classList.contains("show"), text: el.textContent.trim() };
+});
+check("副作用佇列有送達 DOM", toast.shown && toast.text.length > 0, toast.text);
+
+const sample = () =>
+  page.evaluate(() => {
+    const text = (id) => document.getElementById(id)?.textContent ?? "";
+    return {
+      clock: text("score").slice(-5),
+      health: text("healthText"),
+      gold: parseInt(text("gold").replace(/\D/g, ""), 10),
+      skills: document.querySelectorAll("[data-skill]").length,
+    };
+  });
+
 // 右鍵移動：會走一次完整的路徑規劃。
 const box = await page.locator("#world").boundingBox();
 await page.mouse.click(box.x + box.width * 0.7, box.y + box.height * 0.35, { button: "right" });
-await page.waitForTimeout(3000);
 
-const match = await page.evaluate(() => {
-  const text = (id) => document.getElementById(id)?.textContent ?? "";
-  return {
-    clock: text("score").slice(-5),
-    health: text("healthText"),
-    gold: parseInt(text("gold").replace(/\D/g, ""), 10),
-    skills: document.querySelectorAll("[data-skill]").length,
-  };
-});
-check("戰鬥計時有前進", /^00:0[1-9]|^00:[1-9]/.test(match.clock), match.clock);
-check("血量已顯示", /\d+ \/ \d+/.test(match.health), match.health);
-check("金幣隨時間增加", match.gold > 250, `◈ ${match.gold}`);
-check("技能列有四格", match.skills === 4);
+// 模擬速度取決於機器與 GPU（軟體 GL 下可能只有真實時間的兩成），所以比較
+// 兩次取樣的差值，而不是斷言時鐘走到某個絕對值。
+const first = await sample();
+await page.waitForTimeout(4000);
+const second = await sample();
+
+check("模擬有在前進", second.gold > first.gold, `◈ ${first.gold} → ◈ ${second.gold}`);
+check("時鐘有在走", second.clock !== "00:00" || first.clock !== second.clock, `${first.clock} → ${second.clock}`);
+check("血量已顯示", /\d+ \/ \d+/.test(second.health), second.health);
+check("技能列有四格", second.skills === 4);
+
 
 await browser.close();
 if (errors.length) {

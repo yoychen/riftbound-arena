@@ -4,6 +4,7 @@ import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
 import { clamp, clock, dist, rand } from "./core/vec.js";
 import { createRng, TERRAIN_SEED } from "./core/rng.js";
 import { createNavigation } from "./core/navigation.js";
+import { createEventQueue } from "./core/events.js";
 const $ = (id) => document.getElementById(id);
 
 let renderer;
@@ -293,7 +294,36 @@ let mouseDown = false,
   pointerKnown = false,
   touchVector = { x: 0, z: 0 };
 const coarse = matchMedia("(pointer:coarse)").matches;
-function tone(freq = 400, duration = 0.06, volume = 0.025, type = "sine") {
+/**
+ * 副作用佇列。ringFx / burst / announce / feed / tone 只負責描述「要發生什麼」，
+ * 真正的 THREE 與 DOM 操作集中在 handleEvent，每幀 drain 一次。
+ */
+const events = createEventQueue();
+const ringFx = (x, z, r, color, life = 0.45) =>
+  events.emit({ type: "ring", x, z, r, color, life });
+const burst = (x, z, color, count = 10) =>
+  events.emit({ type: "burst", x, z, color, count });
+const announce = (text) => events.emit({ type: "announce", text });
+const feed = (text) => events.emit({ type: "feed", text });
+const tone = (freq = 400, duration = 0.06, volume = 0.025, wave = "sine") =>
+  events.emit({ type: "sound", freq, duration, volume, wave });
+
+function handleEvent(event) {
+  switch (event.type) {
+    case "ring":
+      return playRing(event.x, event.z, event.r, event.color, event.life);
+    case "burst":
+      return playBurst(event.x, event.z, event.color, event.count);
+    case "announce":
+      return showAnnounce(event.text);
+    case "feed":
+      return showFeed(event.text);
+    case "sound":
+      return playTone(event.freq, event.duration, event.volume, event.wave);
+  }
+}
+
+function playTone(freq, duration, volume, type) {
   if (muted || !audioCtx) return;
   const o = audioCtx.createOscillator(),
     g = audioCtx.createGain();
@@ -505,6 +535,8 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
               : 2.8,
     speed: type === "hero" ? h.speed : type === "boss" ? 3 : 4.2,
     attack: 0,
+    /** 面向角度（弧度）。模擬層只寫這個數字，模型旋轉由 syncModels 推導。 */
+    facing: 0,
     cd: [0, 0, 0, 0],
     dead: 0,
     progress: team === 0 ? 0 : 1,
@@ -538,6 +570,7 @@ function clearBattle() {
 }
 function setupBattle(hero) {
   movePath = [];
+  events.clear();
   clearBattle();
   time = 0;
   waveAt = 1;
@@ -572,7 +605,7 @@ function setupBattle(hero) {
   buildSkills();
   updateHud();
 }
-function ringFx(x, z, r, color, life = 0.45) {
+function playRing(x, z, r, color, life = 0.45) {
   const m = new THREE.Mesh(
     new THREE.RingGeometry(r * 0.88, r, 40),
     new THREE.MeshBasicMaterial({
@@ -588,7 +621,7 @@ function ringFx(x, z, r, color, life = 0.45) {
   scene.add(m);
   effects.push({ model: m, life, max: life, expand: true });
 }
-function burst(x, z, color, count = 10) {
+function playBurst(x, z, color, count = 10) {
   for (let i = 0; i < count; i++) {
     const m = sphere(0.12, color, x, 0.6, z, scene);
     effects.push({
@@ -601,12 +634,12 @@ function burst(x, z, color, count = 10) {
     });
   }
 }
-function announce(text) {
+function showAnnounce(text) {
   $("toast").textContent = text;
   $("toast").classList.add("show");
   toastUntil = performance.now() + 3400;
 }
-function feed(text) {
+function showFeed(text) {
   const d = document.createElement("div");
   d.textContent = text;
   $("feed").prepend(d);
@@ -726,7 +759,6 @@ function damage(target, n, source, skill = false) {
 }
 function kill(e, source) {
   e.hp = 0;
-  e.model.visible = false;
   burst(e.x, e.z, e.team === 0 ? 0x70d8d1 : 0xed9b75, 14);
   if (e.type === "hero") {
     scores[source?.team >= 0 ? source.team : 1 - e.team]++;
@@ -824,7 +856,7 @@ function direction(e) {
   const t = targetFor(e, 18);
   return t
     ? { x: t.x - e.x, z: t.z - e.z }
-    : { x: Math.sin(e.model.rotation.y), z: Math.cos(e.model.rotation.y) };
+    : { x: Math.sin(e.facing), z: Math.cos(e.facing) };
 }
 function attack(e) {
   if (e.attack > 0 || e.hp <= 0 || e.stun > 0) return;
@@ -832,7 +864,7 @@ function attack(e) {
     l = Math.hypot(d.x, d.z) || 1;
   d.x /= l;
   d.z /= l;
-  e.model.rotation.y = Math.atan2(d.x, d.z);
+  e.facing = Math.atan2(d.x, d.z);
   e.swing = 0.18;
   e.attack =
     e.type === "hero"
@@ -982,7 +1014,7 @@ function cast(e, slot) {
     tx = e.x + d.x * 13;
     tz = e.z + d.z * 13;
   }
-  e.model.rotation.y = Math.atan2(d.x, d.z);
+  e.facing = Math.atan2(d.x, d.z);
   if (slot === 3) {
     dash(e, d, 5.5);
     e.cd[3] = 4.5;
@@ -1392,7 +1424,7 @@ function ai(e, dt) {
     }
     if (target && dist(e, target) <= e.range + 1) {
       let d = { x: target.x - e.x, z: target.z - e.z };
-      e.model.rotation.y = Math.atan2(d.x, d.z);
+      e.facing = Math.atan2(d.x, d.z);
       if (e.attack <= 0) {
         if (e.range > 6) {
           e.attack = HEROES[e.hero].rate;
@@ -1421,7 +1453,7 @@ function ai(e, dt) {
     if (target) {
       dest = target;
       if (dist(e, target) <= e.range) {
-        e.model.rotation.y = Math.atan2(target.x - e.x, target.z - e.z);
+        e.facing = Math.atan2(target.x - e.x, target.z - e.z);
         attack(e);
         dest = null;
       }
@@ -1472,7 +1504,7 @@ function ai(e, dt) {
       d = Math.hypot(dx, dz);
     if (d > 1) {
       move(e, (dx / d) * speed, (dz / d) * speed, dt, e.type !== "hero");
-      e.model.rotation.y = Math.atan2(dx, dz);
+      e.facing = Math.atan2(dx, dz);
     } else e.moving = false;
   } else e.moving = false;
 }
@@ -1481,8 +1513,7 @@ function claimBoss(team, lane) {
   boss.hp = boss.maxHp = 2700;
   boss.team = team;
   boss.lane = lane;
-  boss.model.visible = true;
-  boss.model.rotation.y = team === 0 ? 1 : -2;
+  boss.facing = team === 0 ? 1 : -2;
   boss.progress = nearestProgress(boss);
   capture = null;
   ringFx(0, 0, 8, teamColors[team], 2);
@@ -1580,7 +1611,6 @@ function update(dt) {
           e.hp = e.maxHp;
           e.x = bases[e.team].x + (e.team === 0 ? 3 : -3);
           e.z = bases[e.team].z;
-          e.model.visible = true;
           e.shield = 0;
           e.cd = [0, 0, 0, 0];
           e.invuln = 2;
@@ -1650,25 +1680,10 @@ function update(dt) {
         }
         const dir = direction(e);
         if (Math.hypot(dir.x, dir.z) > 0.03)
-          e.model.rotation.y = Math.atan2(dir.x, dir.z);
+          e.facing = Math.atan2(dir.x, dir.z);
         if (mouseDown) attack(e);
       }
     } else ai(e, dt);
-    e.model.position.set(
-      e.x,
-      e.type === "hero" || e.type === "minion"
-        ? e.moving
-          ? Math.abs(Math.sin(time * 14 + e.id)) * 0.13
-          : 0
-        : 0,
-      e.z,
-    );
-    e.model.scale.setScalar(e.hit > 0 ? 1.045 : 1);
-    if (e.model.userData.crystal) {
-      e.model.userData.crystal.rotation.y = time * 0.6;
-      e.model.userData.crystal.position.y +=
-        (Math.sin(time * 2) - Math.sin((time - dt) * 2)) * 0.12;
-    }
   }
   for (const p of projectiles) {
     let step = p.speed * dt;
@@ -1782,8 +1797,35 @@ function update(dt) {
     }
     return true;
   });
+  syncModels(dt);
   if (state !== "playing") return;
   updateHud();
+}
+/**
+ * 模擬 → 場景的單向同步。
+ *
+ * 模擬層只寫純數值（x / z / facing / hp / hit），模型的位置、旋轉與可見性
+ * 一律在這裡推導。這道單向性是把遊戲邏輯與 THREE 分開的前提：邏輯不再需要
+ * 持有 Object3D，也就能在沒有 WebGL 的環境裡執行與測試。
+ */
+function syncModels(dt) {
+  for (const e of entities) {
+    e.model.visible = e.hp > 0;
+    if (e.hp <= 0) continue;
+    const bob =
+      (e.type === "hero" || e.type === "minion") && e.moving
+        ? Math.abs(Math.sin(time * 14 + e.id)) * 0.13
+        : 0;
+    e.model.position.set(e.x, bob, e.z);
+    e.model.rotation.y = e.facing;
+    e.model.scale.setScalar(e.hit > 0 ? 1.045 : 1);
+    const crystal = e.model.userData.crystal;
+    if (crystal) {
+      crystal.rotation.y = time * 0.6;
+      crystal.position.y +=
+        (Math.sin(time * 2) - Math.sin((time - dt) * 2)) * 0.12;
+    }
+  }
 }
 function updateHud() {
   if (!player) return;
@@ -2022,6 +2064,8 @@ function frame(now) {
     ray.ray.intersectPlane(ground, aim);
     update(dt);
   }
+  // 輸入處理與 UI 也會發事件，所以不論處於哪個狀態都要取用。
+  events.drain(handleEvent);
   if (state === "select") {
     viewTarget.lerp(new THREE.Vector3(0, 0, 0), 0.04);
     camera.position.lerp(new THREE.Vector3(4, 68, 57), 0.035);
