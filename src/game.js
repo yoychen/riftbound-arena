@@ -1,12 +1,10 @@
-import * as THREE from "../vendor/three/three.module.js";
+import * as THREE from "three";
 import { HEROES } from "./data/heroes.js";
 import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
-const $ = (id) => document.getElementById(id),
-  clamp = (v, a, b) => Math.max(a, Math.min(b, v)),
-  rand = (a, b) => a + Math.random() * (b - a),
-  dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z),
-  clock = (t) =>
-    `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+import { clamp, clock, dist, rand } from "./core/vec.js";
+import { createRng, TERRAIN_SEED } from "./core/rng.js";
+import { createNavigation } from "./core/navigation.js";
+const $ = (id) => document.getElementById(id);
 
 let renderer;
 try {
@@ -165,11 +163,7 @@ const pitRing = mesh(
   0.1,
 );
 pitRing.rotation.x = Math.PI / 2;
-let seed = 171;
-function seeded() {
-  seed = (seed * 16807) % 2147483647;
-  return (seed - 1) / 2147483646;
-}
+const seeded = createRng(TERRAIN_SEED);
 const obstacles = [];
 function nearLane(x, z, d = 6) {
   return lanePoints.some((ps) =>
@@ -901,116 +895,13 @@ function move(e, dx, dz, dt, ignore = false) {
   e.z = z;
   e.moving = Math.hypot(dx, dz) > 0.1;
 }
-function walkableSegment(a, b) {
-  const dx = b.x - a.x,
-    dz = b.z - a.z,
-    l = dx * dx + dz * dz;
-  return !obstacles.some((o) => {
-    const t = l ? clamp(((o.x - a.x) * dx + (o.z - a.z) * dz) / l, 0, 1) : 0;
-    return Math.hypot(o.x - a.x - dx * t, o.z - a.z - dz * t) < o.r + 0.55;
-  });
-}
-function planPath(from, to) {
-  if (walkableSegment(from, to)) return [{ ...to }];
-  const step = 1.5,
-    cols = 59,
-    rows = 49,
-    id = (x, z) => z * cols + x,
-    point = (n) => ({
-      x: -43.5 + (n % cols) * step,
-      z: -36 + Math.floor(n / cols) * step,
-    }),
-    nearest = (p) =>
-      id(
-        clamp(Math.round((p.x + 43.5) / step), 0, cols - 1),
-        clamp(Math.round((p.z + 36) / step), 0, rows - 1),
-      );
-  const free = new Map(),
-    valid = (n) => {
-      if (!free.has(n)) free.set(n, walkableSegment(point(n), point(n)));
-      return free.get(n);
-    };
-  function accessible(p) {
-    let best = -1,
-      dd = Infinity;
-    for (let n = 0; n < cols * rows; n++) {
-      let d = dist(p, point(n));
-      if (d < dd && valid(n)) {
-        dd = d;
-        best = n;
-      }
-    }
-    return best;
-  }
-  let start = nearest(from);
-  if (!valid(start) || !walkableSegment(from, point(start)))
-    start = accessible(from);
-  const goal = accessible(to);
-  if (start < 0 || goal < 0) return [];
-  const open = new Set([start]),
-    came = new Map(),
-    g = new Map([[start, 0]]),
-    score = (n) => (g.get(n) ?? Infinity) + dist(point(n), point(goal));
-  let found = false;
-  while (open.size) {
-    let current = -1,
-      best = Infinity;
-    for (const n of open) {
-      const f = score(n);
-      if (f < best) {
-        best = f;
-        current = n;
-      }
-    }
-    if (current === goal) {
-      found = true;
-      break;
-    }
-    open.delete(current);
-    const x = current % cols,
-      z = Math.floor(current / cols);
-    for (let dx = -1; dx <= 1; dx++)
-      for (let dz = -1; dz <= 1; dz++) {
-        if (
-          (!dx && !dz) ||
-          x + dx < 0 ||
-          x + dx >= cols ||
-          z + dz < 0 ||
-          z + dz >= rows
-        )
-          continue;
-        const next = id(x + dx, z + dz);
-        if (!valid(next) || !walkableSegment(point(current), point(next)))
-          continue;
-        const cost = g.get(current) + Math.hypot(dx, dz) * step;
-        if (cost < (g.get(next) ?? Infinity)) {
-          came.set(next, current);
-          g.set(next, cost);
-          open.add(next);
-        }
-      }
-  }
-  if (!found) return [];
-  let nodes = [point(goal)],
-    n = goal;
-  while (came.has(n)) {
-    n = came.get(n);
-    nodes.unshift(point(n));
-  }
-  if (walkableSegment(nodes.at(-1), to)) nodes.push({ ...to });
-  let result = [],
-    anchor = from;
-  while (nodes.length) {
-    let furthest = -1;
-    for (let i = 0; i < nodes.length; i++)
-      if (walkableSegment(anchor, nodes[i])) furthest = i;
-    if (furthest < 0) return [];
-    anchor = nodes[furthest];
-    result.push(anchor);
-    nodes = nodes.slice(furthest + 1);
-  }
-  return result;
-}
+/**
+ * 障礙物在地形建好之後就不再變動，所以導航實例在這裡一次建立，
+ * 格點通行表由它自己在第一次規劃時算好並快取。
+ */
+const navigation = createNavigation(obstacles);
+const planPath = navigation.planPath;
+
 function setMoveDestination(x, z) {
   if (state !== "playing" || player.hp <= 0) return;
   const destination = { x: clamp(x, -43.5, 43.5), z: clamp(z, -35.5, 35.5) };

@@ -4,27 +4,40 @@
 
 ## 原始碼說明
 
-遊戲最初直接以原生 JavaScript、HTML、CSS 撰寫，沒有 TypeScript、React、編譯前模板或 source map。舊提交把手寫原始碼放在 dist/，且排版過度壓縮；本版將它搬到 src/ 並重新排版。這不是從 bundle 反編譯，也沒有遺漏另一份 src/。
+遊戲最初直接以原生 JavaScript、HTML、CSS 撰寫，沒有 TypeScript、React、編譯前模板或 source map。舊提交把手寫原始碼放在 dist/，且排版過度壓縮；後續提交將它搬到 src/ 並重新排版。這不是從 bundle 反編譯，也沒有遺漏另一份 src/。
+
+目前正在進行模組化重構：把 `src/game.js` 拆成 `core/`（純邏輯，不依賴 THREE 與 DOM）、`render/`、`ui/`、`input/` 四層，並為 `core/` 補上測試。進度見 `docs/refactor-plan.md`。
 
 - `index.html`：遊戲介面與入口。
 - `src/game.js`：Three.js 場景、角色模型、戰鬥、AI、路徑、觸控與遊戲循環。
 - `src/data/heroes.js`：四位英雄的數值、技能、冷卻與文案。
 - `src/data/evolutions.js`：英雄專屬與共通進化。
 - `src/styles.css`：完整桌面／手機樣式。
-- `vendor/three/`：原專案使用的 Three.js 發行檔（第三方 library，保留版權標示），不是遊戲原始碼。
-- `scripts/`：不依賴外部套件的本機伺服器與靜態輸出工具。
+- `src/core/`：純遊戲邏輯，不依賴 THREE 與 DOM，測試都打在這一層。
+- `tests/`：Vitest 測試。
+- `scripts/smoke-browser.mjs`：Playwright 瀏覽器冒煙檢查。
 - `.git/`：原有 4 筆提交與本次原始碼整理的新增提交。
 - `.openai/hosting.json`：原 Sites 識別及靜態輸出設定，一般靜態主機不需要它。
 
 ## 本機執行
 
-需要 Node.js 18 以上。沒有 npm dependencies，不必先 npm install。
+需要 Node.js 20 以上。
 
 ```sh
+npm install
 npm run dev
 ```
 
-開啟 http://localhost:8080 。修改原始碼後重新整理瀏覽器。不要直接雙擊 index.html：ES modules 需要 HTTP server。Google Fonts 無法連線時會使用系統字型。
+開啟 http://localhost:8080 。Vite 提供 HMR，存檔即更新。Google Fonts 無法連線時會使用系統字型。
+
+## 測試
+
+```sh
+npm test          # 跑一次
+npm run test:watch
+npm run typecheck # tsc --noEmit
+npm run smoke     # 瀏覽器冒煙檢查，需另一個終端機先跑 npm run dev
+```
 
 ## 輸出靜態網站
 
@@ -33,7 +46,7 @@ npm run build
 npm run preview
 ```
 
-build 只把 index.html、src/、vendor/ 複製到 dist/，不做 bundling 或 minification。部署時使用 dist/ 內容；日常修改請編輯 src/。
+Vite 會輸出 bundled、minified 的 dist/。部署時使用 dist/ 內容；日常修改請編輯 src/。
 
 ## 推到自己的 Git server
 
