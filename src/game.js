@@ -7,7 +7,11 @@ import { createNavigation } from "./core/navigation.js";
 import { createWorld } from "./core/world.js";
 import { createUnit } from "./core/entities.js";
 import { enemies, targetFor } from "./core/targeting.js";
-import { damage, kill } from "./core/combat.js";
+import { addZone, damage, kill, shoot } from "./core/combat.js";
+import { dash, move } from "./core/movement.js";
+import { aimDirection, attack, cast } from "./core/skills.js";
+import { ai } from "./core/ai.js";
+import { TEAM_COLORS } from "./config/colors.js";
 const $ = (id) => document.getElementById(id);
 
 let renderer;
@@ -240,7 +244,7 @@ const bases = [
     { x: -34, z: 25 },
     { x: 34, z: -25 },
   ],
-  teamColors = [0x65d9d1, 0xf18c87];
+  teamColors = TEAM_COLORS;
 for (let team = 0; team < 2; team++) {
   const b = bases[team];
   cyl(8, 8, 0.4, 0x687e70, b.x, 0.3, b.z, mapRoot, 20);
@@ -274,6 +278,8 @@ const keys = new Set(),
   aim = new THREE.Vector3(0, 0, 0),
   ray = new THREE.Raycaster(),
   ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+// 瞄準點是 THREE 的 Vector3，只讀 x / z，直接交給模擬層共用同一個物件。
+world.aim = aim;
 let attackPointerId = null;
 let mouseDown = false,
   pointerKnown = false,
@@ -505,7 +511,7 @@ function clearBattle() {
       scene.remove(e.model);
       worldEntities.remove(e.model);
     }
-  for (const z of world.zones) scene.remove(z.model);
+  for (const z of world.zones) if (z.model) scene.remove(z.model);
   world.entities = [];
   world.projectiles = [];
   effects = [];
@@ -578,6 +584,23 @@ function playBurst(x, z, color, count = 10) {
     });
   }
 }
+/** 區域傷害的地面圓盤。模擬只給座標、半徑與顏色。 */
+function zoneMesh(x, z, r, color) {
+  const m = new THREE.Mesh(
+    new THREE.CircleGeometry(r, 40),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.19,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, 0.12, z);
+  scene.add(m);
+  return m;
+}
 /** 傷害數字由呈現層自行保管生命週期，模擬只負責說「這裡跳一個數字」。 */
 function showDamageNumber(x, z, text, color) {
   floaters.push({ x, z, y: 2.8, text, life: 0.8, color });
@@ -594,123 +617,38 @@ function showFeed(text) {
   while ($("feed").children.length > 4) $("feed").lastChild.remove();
   setTimeout(() => d.remove(), 8000);
 }
-function shoot(e, dir, opts = {}) {
-  const len = Math.hypot(dir.x, dir.z) || 1;
-  dir = { x: dir.x / len, z: dir.z / len };
-  let model = sphere(
-    opts.big ? 0.34 : 0.18,
-    opts.color ?? teamColors[e.team] ?? 0xefb078,
-    e.x,
-    1.15,
-    e.z,
-    scene,
-  );
-  world.projectiles.push({
-    model,
-    x: e.x,
-    z: e.z,
-    dx: dir.x,
-    dz: dir.z,
-    speed: opts.speed || 28,
-    left: opts.range || e.range,
-    source: e,
-    damage: opts.damage || e.damage,
-    pierce: opts.pierce || false,
-    hit: new Set(),
-    radius: opts.big ? 0.95 : 0.65,
-    slow: opts.slow,
-    skill: opts.skill,
-    bounce: opts.bounce ?? !!e.mods.bounce,
-  });
-}
-function direction(e) {
-  if (e.isPlayer) {
-    if (coarse || !pointerKnown) {
-      let t = targetFor(world, e, 18);
-      if (t) return { x: t.x - e.x, z: t.z - e.z };
-    }
-    return { x: aim.x - e.x, z: aim.z - e.z };
-  }
-  const t = targetFor(world, e, 18);
-  return t
-    ? { x: t.x - e.x, z: t.z - e.z }
-    : { x: Math.sin(e.facing), z: Math.cos(e.facing) };
-}
-function attack(e) {
-  if (e.attack > 0 || e.hp <= 0 || e.stun > 0) return;
-  const d = direction(e),
-    l = Math.hypot(d.x, d.z) || 1;
-  d.x /= l;
-  d.z /= l;
-  e.facing = Math.atan2(d.x, d.z);
-  e.swing = 0.18;
-  e.attack =
-    e.type === "hero"
-      ? HEROES[e.hero].rate / (e.boost > 0 ? 1.65 : 1)
-      : e.type === "minion"
-        ? 1.1
-        : 1.25;
-  if (e.range < 6) {
-    ringFx(
-      e.x + d.x * 1.4,
-      e.z + d.z * 1.4,
-      e.range * 0.6,
-      e.team < 0 ? 0xfac57c : teamColors[e.team],
-      0.18,
-    );
-    for (const t of enemies(world, e, e.range + 1))
-      if (((t.x - e.x) * d.x + (t.z - e.z) * d.z) / (dist(e, t) || 1) > -0.1)
-        damage(world, t, e.damage, e);
-    if (e.mods.blade)
-      shoot(e, d, {
-        damage: e.damage * 0.55,
-        range: 10,
-        pierce: true,
-        color: 0x92ead2,
-      });
-  } else {
-    shoot(e, d);
-    if (e.mods.split)
-      for (const a of [-0.17, 0.17])
-        shoot(
-          e,
-          {
-            x: d.x * Math.cos(a) - d.z * Math.sin(a),
-            z: d.x * Math.sin(a) + d.z * Math.cos(a),
-          },
-          { damage: e.damage * 0.6 },
-        );
-  }
-  if (e.isPlayer)
-    tone(
-      e.hero === 0 ? 220 : e.hero === 1 ? 650 : 430,
-      0.045,
-      0.014,
-      "triangle",
-    );
-}
-function move(e, dx, dz, dt, ignore = false) {
-  let x = clamp(e.x + dx * dt, -44, 44),
-    z = clamp(e.z + dz * dt, -36, 36);
-  if (!ignore)
-    for (const o of obstacles) {
-      let d = Math.hypot(x - o.x, z - o.z);
-      if (d < o.r + 0.48) {
-        let a = Math.atan2(z - o.z, x - o.x);
-        x = o.x + Math.cos(a) * (o.r + 0.5);
-        z = o.z + Math.sin(a) * (o.r + 0.5);
-      }
-    }
-  e.x = x;
-  e.z = z;
-  e.moving = Math.hypot(dx, dz) > 0.1;
-}
 /**
  * 障礙物在地形建好之後就不再變動，所以導航實例在這裡一次建立，
  * 格點通行表由它自己在第一次規劃時算好並快取。
  */
 const navigation = createNavigation(obstacles);
 const planPath = navigation.planPath;
+
+/**
+ * 地形提供給模擬層的介面。
+ *
+ * 兵線取值仍然直接問 THREE 的曲線，而不是在核心層拿取樣點內插 ——
+ * 後者會和原本的走法產生微小差異。
+ */
+const field = {
+  obstacles,
+  navigation,
+  bases,
+  bounds: { x: 44, z: 36 },
+  pointOnLane: (lane, t) => curves[lane].getPoint(t),
+  progressOn: (lane, point) => {
+    let best = Infinity,
+      progress = 0;
+    lanePoints[lane].forEach((p, i) => {
+      const d = dist(point, p);
+      if (d < best) {
+        best = d;
+        progress = i / 160;
+      }
+    });
+    return progress;
+  },
+};
 
 function setMoveDestination(x, z) {
   if (state !== "playing" || world.player.hp <= 0) return;
@@ -720,195 +658,6 @@ function setMoveDestination(x, z) {
     const end = world.movePath.at(-1);
     ringFx(end.x, end.z, 0.85, 0xf2dfa1, 0.65);
   } else announce("這個位置無法抵達，請點選附近空地。");
-}
-function dash(e, d, length = 6) {
-  if (e.isPlayer) world.movePath = [];
-  const n = Math.hypot(d.x, d.z) || 1;
-  const ox = e.x,
-    oz = e.z;
-  move(e, (d.x / n) * length, (d.z / n) * length, 1, true);
-  e.invuln = 0.22;
-  ringFx(ox, oz, 1.8, teamColors[e.team], 0.3);
-  if (e.mods.trail) addZone(ox, oz, 3.2, 3, e, 28, 0xf6a266, 0.2);
-  if (e.mods.roll) e.boost = 3;
-}
-function addZone(
-  x,
-  z,
-  r,
-  life,
-  e,
-  dmg,
-  color,
-  delay = 0.7,
-  slow = 0,
-  stun = 0,
-) {
-  x = clamp(x, -44, 44);
-  z = clamp(z, -36, 36);
-  const m = new THREE.Mesh(
-    new THREE.CircleGeometry(r, 40),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.19,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.position.set(x, 0.12, z);
-  scene.add(m);
-  world.zones.push({
-    x,
-    z,
-    r,
-    life,
-    max: life,
-    source: e,
-    dmg,
-    delay,
-    tick: delay,
-    model: m,
-    slow,
-    stun,
-  });
-  ringFx(x, z, r, color, delay + 0.2);
-}
-function cast(e, slot) {
-  if (state !== "playing" || e.hp <= 0 || e.cd[slot] > 0 || e.stun > 0) return;
-  const h = HEROES[e.hero],
-    d = direction(e),
-    l = Math.hypot(d.x, d.z) || 1;
-  d.x /= l;
-  d.z /= l;
-  const t =
-    e.isPlayer && !coarse && pointerKnown
-      ? aim
-      : { x: e.x + d.x * 8, z: e.z + d.z * 8 };
-  let tx = t.x,
-    tz = t.z;
-  if (dist(e, t) > 13) {
-    tx = e.x + d.x * 13;
-    tz = e.z + d.z * 13;
-  }
-  e.facing = Math.atan2(d.x, d.z);
-  if (slot === 3) {
-    dash(e, d, 5.5);
-    e.cd[3] = 4.5;
-    return;
-  }
-  e.cd[slot] = h.cd[slot] * (e.mods.haste ? 0.78 : 1);
-  if (e.isPlayer) tone(slot === 2 ? 130 : 510, 0.16, 0.04, "triangle");
-  if (e.hero === 0) {
-    if (slot === 0) {
-      const ox = e.x,
-        oz = e.z;
-      dash(e, d, 6);
-      for (const u of enemies(world, e, 9)) {
-        const ux = u.x - ox,
-          uz = u.z - oz,
-          along = ux * d.x + uz * d.z;
-        if (along > -1 && along < 9 && Math.abs(ux * d.z - uz * d.x) < 3)
-          damage(world, u, 155, e, true);
-      }
-      ringFx(e.x, e.z, 3.2, h.color);
-    }
-    if (slot === 1) {
-      e.guard = 1.8;
-      e.shield += 90;
-      ringFx(e.x, e.z, 2.3, 0xd8efc7, 1.8);
-    }
-    if (slot === 2) {
-      addZone(e.x, e.z, e.mods.mega ? 9 : 6, 3.2, e, 100, h.color, 0.1);
-      e.guard = 1.2;
-    }
-  }
-  if (e.hero === 1) {
-    if (slot === 0) {
-      shoot(e, d, {
-        damage: 170,
-        range: 22,
-        pierce: true,
-        big: true,
-        skill: true,
-        color: 0xffd997,
-      });
-      if (e.mods.fan)
-        for (let a of [-0.22, 0.22])
-          shoot(
-            e,
-            {
-              x: d.x * Math.cos(a) - d.z * Math.sin(a),
-              z: d.x * Math.sin(a) + d.z * Math.cos(a),
-            },
-            {
-              damage: 120,
-              range: 20,
-              pierce: true,
-              big: true,
-              skill: true,
-              color: 0xffd997,
-            },
-          );
-    }
-    if (slot === 1) {
-      dash(e, { x: -d.x, z: -d.z }, 6);
-      e.boost = 3;
-      if (e.mods.roll)
-        for (let a of [-0.2, 0, 0.2])
-          shoot(e, { x: d.x + a, z: d.z }, { damage: 75, range: 15 });
-    }
-    if (slot === 2)
-      addZone(tx, tz, e.mods.mega ? 9 : 6, 4, e, 95, 0xe9cc7d, 0.55, 0.6);
-  }
-  if (e.hero === 2) {
-    if (slot === 0) {
-      shoot(e, d, {
-        damage: 135,
-        range: 17,
-        big: true,
-        pierce: !!e.mods.fan,
-        slow: 3,
-        skill: true,
-        color: 0x98e8ef,
-      });
-    }
-    if (slot === 1)
-      addZone(tx, tz, e.mods.mega ? 7 : 4.5, 1, e, 235, 0xfa9870, 0.7);
-    if (slot === 2)
-      addZone(tx, tz, e.mods.mega ? 9 : 6, 4.5, e, 100, 0xc1a1ff, 0.3, 0.8);
-  }
-  if (e.hero === 3) {
-    if (slot === 0) {
-      dash(e, d, 7);
-      for (const u of enemies(world, e, 4.5)) {
-        damage(world, u, 165, e, true);
-        u.stun = 1.2;
-        move(u, d.x * 3, d.z * 3, 1, true);
-      }
-      ringFx(e.x, e.z, 4.2, h.color);
-    }
-    if (slot === 1) {
-      e.shield += 300 + (e.mods.fortress ? 200 : 0);
-      addZone(e.x, e.z, 4.8, 0.4, e, 100, h.color, 0.1, 2);
-    }
-    if (slot === 2) {
-      addZone(
-        e.x,
-        e.z,
-        e.mods.mega ? 10 : 7,
-        0.8,
-        e,
-        340,
-        0xf9bd84,
-        0.45,
-        0,
-        2,
-      );
-      e.shield += 250;
-    }
-  }
 }
 
 function upgradePool() {
@@ -976,6 +725,16 @@ function showUpgrade() {
     }
   };
 }
+/**
+ * 玩家主動施放技能。
+ *
+ * 核心層的 cast 不認識 UI 狀態機，所以「現在能不能操作」的判斷留在這裡 ——
+ * 技能按鈕在暫停或商店畫面仍然點得到。
+ */
+function playerCast(slot) {
+  if (state !== "playing") return;
+  cast(world, field, world.player, slot);
+}
 function buildSkills() {
   const h = HEROES[world.player.hero];
   $("heroBadge").textContent = h.icon;
@@ -990,10 +749,10 @@ function buildSkills() {
     b.onpointerdown = (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      cast(world.player, +b.dataset.skill);
+      playerCast(+b.dataset.skill);
     };
     b.onclick = (e) => {
-      if (e.detail === 0) cast(world.player, +b.dataset.skill);
+      if (e.detail === 0) playerCast(+b.dataset.skill);
     };
   });
 }
@@ -1134,157 +893,7 @@ function spawnWave() {
       }
 }
 function nearestProgress(e) {
-  let best = Infinity,
-    t = 0;
-  lanePoints[e.lane].forEach((p, i) => {
-    const d = dist(e, p);
-    if (d < best) {
-      best = d;
-      t = i / 160;
-    }
-  });
-  return t;
-}
-function ai(e, dt) {
-  if (e.stun > 0) return;
-  let target = targetFor(world, e, e.type === "hero" ? 18 : e.range + 0.8);
-  let dest = null,
-    speed = e.speed * (e.slow > 0 ? 0.5 : 1);
-  if (e.type === "tower" || e.type === "core") {
-    if (target && dist(e, target) <= e.range) {
-      if (e.attack <= 0) {
-        e.attack = e.type === "tower" ? 1.15 : 1.5;
-        shoot(
-          e,
-          { x: target.x - e.x, z: target.z - e.z },
-          { range: e.range + 2, damage: e.damage, speed: 24, big: true },
-        );
-      }
-    }
-    return;
-  }
-  if (e.type === "boss" && e.team < 0) {
-    if (target && dist(e, { x: 0, z: 0 }) < 7) {
-      dest = target;
-      if (dist(e, target) < 5 && e.attack <= 0) {
-        e.attack = 2.5;
-        addZone(e.x, e.z, 5, 0.9, e, 160, 0xf79c65, 0.65);
-      }
-    } else dest = { x: 0, z: 0 };
-  } else if (e.type === "hero") {
-    if (e.hp < e.maxHp * 0.24) {
-      dest = bases[e.team];
-      target = null;
-    } else if (dist(e, bases[e.team]) < 8 && e.hp < e.maxHp * 0.8) {
-      dest = bases[e.team];
-      target = null;
-    } else if (e.team === 0 && world.ping && world.ping.until > world.time) {
-      dest = world.ping;
-      if (target && dist(e, target) < e.range) dest = null;
-    } else if (world.capture && world.capture.team === e.team) {
-      dest = { x: 0, z: 0 };
-    } else if (
-      world.boss?.hp > 0 &&
-      world.boss.team === -1 &&
-      (world.time % 180 > 5 || dist(e, world.boss) < 17)
-    ) {
-      dest = world.boss;
-      if (dist(e, world.boss) < e.range + 1) target = world.boss;
-    } else if (world.boss?.hp > 0 && world.boss.team === e.team && dist(e, world.boss) < 27) {
-      dest = world.boss;
-    } else if (target && dist(e, target) < 14) {
-      dest = target;
-    } else {
-      e.progress = nearestProgress(e);
-      dest = curves[e.lane].getPoint(
-        clamp(e.progress + (e.team === 0 ? 0.04 : -0.04), 0, 1),
-      );
-    }
-    if (target && dist(e, target) <= e.range + 1) {
-      let d = { x: target.x - e.x, z: target.z - e.z };
-      e.facing = Math.atan2(d.x, d.z);
-      if (e.attack <= 0) {
-        if (e.range > 6) {
-          e.attack = HEROES[e.hero].rate;
-          shoot(e, d);
-        } else attack(e);
-      }
-      if (
-        target.type === "hero" ||
-        target.type === "boss" ||
-        enemies(world, e, 8).length > 2
-      ) {
-        if (e.cd[0] <= 0) cast(e, 0);
-        if (e.cd[1] <= 0 && (e.hero === 2 || e.hp < e.maxHp * 0.8)) cast(e, 1);
-        if (e.cd[2] <= 0 && world.time > 22) cast(e, 2);
-      }
-      if (e.range > 6 && dist(e, target) < 5) {
-        dest = { x: e.x - d.x, z: e.z - d.z };
-      } else if (e.range > 6 && dist(e, target) < e.range * 0.85)
-        dest = {
-          x: e.x + Math.sin(world.time + e.id) * 2,
-          z: e.z + Math.cos(world.time * 0.7 + e.id) * 2,
-        };
-      else dest = null;
-    }
-  } else if (e.type === "minion") {
-    if (target) {
-      dest = target;
-      if (dist(e, target) <= e.range) {
-        e.facing = Math.atan2(target.x - e.x, target.z - e.z);
-        attack(e);
-        dest = null;
-      }
-    } else {
-      e.progress = nearestProgress(e);
-      dest = curves[e.lane].getPoint(
-        clamp(e.progress + (e.team === 0 ? 0.022 : -0.022), 0, 1),
-      );
-    }
-  } else if (e.type === "boss") {
-    target = world.entities
-      .filter(
-        (u) =>
-          u.hp > 0 &&
-          u.team === 1 - e.team &&
-          ((u.type === "tower" && u.lane === e.lane) || u.type === "core"),
-      )
-      .sort((a, b) => dist(e, a) - dist(e, b))[0];
-    if (target) {
-      if (dist(e, target) < 6) {
-        dest = null;
-        if (e.attack <= 0) {
-          e.attack = 2.4;
-          const escort = world.entities.some(
-            (u) =>
-              u.type === "hero" &&
-              u.hp > 0 &&
-              u.team === e.team &&
-              dist(e, u) < 10,
-          );
-          damage(world, target, escort ? 440 : 160, e, true);
-          ringFx(e.x, e.z, 6, 0xffc78a);
-          tone(100, 0.2);
-        }
-      } else {
-        e.progress = nearestProgress(e);
-        dest = curves[e.lane].getPoint(
-          clamp(e.progress + (e.team === 0 ? 0.035 : -0.035), 0, 1),
-        );
-        if (dist(e, curves[e.lane].getPoint(e.progress)) > 5)
-          dest = curves[e.lane].getPoint(e.progress);
-      }
-    }
-  }
-  if (dest) {
-    const dx = dest.x - e.x,
-      dz = dest.z - e.z,
-      d = Math.hypot(dx, dz);
-    if (d > 1) {
-      move(e, (dx / d) * speed, (dz / d) * speed, dt, e.type !== "hero");
-      e.facing = Math.atan2(dx, dz);
-    } else e.moving = false;
-  } else e.moving = false;
+  return field.progressOn(e.lane, e);
 }
 function claimBoss(team, lane) {
   if (!world.boss) return;
@@ -1438,7 +1047,7 @@ function update(dt) {
         if (manualActive) {
           world.movePath = [];
           if (manualLength > 0)
-            move(
+            move(field, 
               e,
               (manualX / Math.max(1, manualLength)) * speed,
               (manualZ / Math.max(1, manualLength)) * speed,
@@ -1452,16 +1061,16 @@ function update(dt) {
           if (d < 0.18) world.movePath.shift();
           else {
             const step = Math.min(speed, d / dt);
-            move(e, (dx / d) * step, (dz / d) * step, dt);
+            move(field, e, (dx / d) * step, (dz / d) * step, dt);
             if (dist(e, dest) < 0.18) world.movePath.shift();
           }
         }
-        const dir = direction(e);
+        const dir = aimDirection(world, e);
         if (Math.hypot(dir.x, dir.z) > 0.03)
           e.facing = Math.atan2(dir.x, dir.z);
-        if (mouseDown) attack(e);
+        if (mouseDown) attack(world, e);
       }
-    } else ai(e, dt);
+    } else ai(world, field, e, dt);
   }
   for (const p of world.projectiles) {
     let step = p.speed * dt;
@@ -1470,7 +1079,6 @@ function update(dt) {
     p.x += p.dx * step;
     p.z += p.dz * step;
     p.left -= step;
-    p.model.position.set(p.x, 1.1, p.z);
     for (const t of world.entities) {
       if (
         t.hp <= 0 ||
@@ -1528,8 +1136,10 @@ function update(dt) {
   }
   world.projectiles = world.projectiles.filter((p) => {
     if (p.left <= 0) {
-      scene.remove(p.model);
-      p.model.geometry.dispose();
+      if (p.model) {
+        scene.remove(p.model);
+        p.model.geometry.dispose();
+      }
       return false;
     }
     return true;
@@ -1537,7 +1147,6 @@ function update(dt) {
   for (const z of world.zones) {
     z.life -= dt;
     z.tick -= dt;
-    z.model.material.opacity = z.tick > 0 ? 0.12 : 0.35;
     if (z.tick <= 0) {
       z.tick = 0.65;
       ringFx(z.x, z.z, z.r, z.source.team === 0 ? 0xb4dfdb : 0xf9a47e, 0.35);
@@ -1551,9 +1160,11 @@ function update(dt) {
   }
   world.zones = world.zones.filter((z) => {
     if (z.life <= 0) {
-      scene.remove(z.model);
-      z.model.geometry.dispose();
-      z.model.material.dispose();
+      if (z.model) {
+        scene.remove(z.model);
+        z.model.geometry.dispose();
+        z.model.material.dispose();
+      }
       return false;
     }
     return true;
@@ -1587,6 +1198,16 @@ function update(dt) {
  * 持有 Object3D，也就能在沒有 WebGL 的環境裡執行與測試。
  */
 function syncModels(dt) {
+  // 模擬只描述投射物與區域的位置與外觀參數，模型在這裡按需建立。
+  for (const p of world.projectiles) {
+    if (!p.model)
+      p.model = sphere(p.big ? 0.34 : 0.18, p.color, p.x, 1.15, p.z, scene);
+    p.model.position.set(p.x, 1.1, p.z);
+  }
+  for (const z of world.zones) {
+    if (!z.model) z.model = zoneMesh(z.x, z.z, z.r, z.color);
+    z.model.material.opacity = z.tick > 0 ? 0.12 : 0.35;
+  }
   for (const e of world.entities) {
     e.model.visible = e.hp > 0;
     if (e.hp <= 0) continue;
@@ -1837,6 +1458,8 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - last) / 1000, 0.045);
   last = now;
+  // 觸控裝置、或滑鼠還沒動過時沒有有意義的游標位置，改為自動鎖定。
+  world.autoAim = coarse || !pointerKnown;
   if (state === "playing") {
     ray.setFromCamera(mouse, camera);
     ray.ray.intersectPlane(ground, aim);
@@ -1908,7 +1531,7 @@ $("world").addEventListener("pointerdown", (e) => {
   } else if (e.button === 0) {
     attackPointerId = e.pointerId;
     mouseDown = true;
-    attack(world.player);
+    attack(world, world.player);
     audioCtx?.resume();
   }
 });
@@ -1934,10 +1557,10 @@ window.addEventListener("keydown", (e) => {
   if (state !== "playing") return;
   keys.add(k);
   if (["w", "a", "s", "d"].includes(k)) world.movePath = [];
-  if (k === "q") cast(world.player, 0);
-  if (k === "e") cast(world.player, 1);
-  if (k === "r") cast(world.player, 2);
-  if (k === " ") cast(world.player, 3);
+  if (k === "q") playerCast(0);
+  if (k === "e") playerCast(1);
+  if (k === "r") playerCast(2);
+  if (k === " ") playerCast(3);
   if (k === "g") command();
   if (k === "b") showShop();
 });
@@ -1997,7 +1620,7 @@ $("touchAttack").addEventListener("pointerdown", (e) => {
   attackPointerId = e.pointerId;
   e.currentTarget.setPointerCapture(e.pointerId);
   mouseDown = true;
-  attack(world.player);
+  attack(world, world.player);
 });
 for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
   $("touchAttack").addEventListener(event, releaseAttackPointer);
