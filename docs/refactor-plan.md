@@ -49,11 +49,15 @@ src/
 
 ## 兩個關鍵的解耦手術
 
-### 一、`entity.model` 必須從邏輯中消失
+### 一、`entity.model` 必須從邏輯中消失 ✅
 
-目前 `ai()`、`attack()`、`cast()` 都在寫 `e.model.rotation.y`，`kill()` 在寫
-`e.model.visible`。改成 entity 持有純數字 `facing`、純布林 `alive`，由
-`render/sync.ts` 單向讀取。全檔共 31 處 `.model.` 引用，真正的耦合點約 10 個。
+`ai()`、`attack()`、`cast()` 原本直接寫 `e.model.rotation.y`，`kill()` 直接寫
+`e.model.visible`。現在實體只持有純數字 `facing`，可見性由 `hp > 0` 推導，
+兩者都在 `syncModels(dt)` 這一遍裡單向套用到模型上。
+
+`syncModels` 刻意放在 `update()` 的最尾端、所有傷害結算與實體清理之後，
+這樣當幀死亡的單位當幀就會隱藏，與原本 `kill()` 立即設 `visible = false`
+的時機一致。
 
 ### 二、副作用改走事件佇列
 
@@ -68,13 +72,21 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 
 副作用一旦變成資料，`damage()` 就能在 Node 裡直接斷言行為。
 
+已完成：`ringFx` / `burst` / `announce` / `feed` / `tone` 這五個名字現在是發射器，
+原本的實作改名為 `playRing` / `playBurst` / `showAnnounce` / `showFeed` /
+`playTone`，集中由 `handleEvent` 派送。47 個呼叫端一行未改。
+
+取用時機在 `frame()` 而非 `update()`，因為輸入處理與 UI 也會發事件，而
+`update()` 在非遊玩狀態會提前返回。換局時 `setupBattle()` 會 `clear()`，
+避免上一局殘留的事件在新戰場冒出來。
+
 ## 階段
 
 | 階段 | 內容 | 測試產出 | 狀態 |
 |---|---|---|---|
 | 0 | Vite + Vitest 進場，vendor/three → three@0.180，scripts/*.mjs 退役 | 冒煙測試 | ✅ |
 | 1 | 抽 vec / rng / navigation | navigation 13 項：直線可走、繞障礙、缺口穿越、不可達回空、平滑後節點數下降、通行表只算一次 | ✅ |
-| 2 | **解耦手術**：facing 欄位 + 事件佇列 | 事件佇列快照 | |
+| 2 | **解耦手術**：facing 欄位 + 事件佇列 + syncModels | 事件佇列 4 項、架構邊界守門 9 項 | ✅ |
 | 3 | World 容器，module-level let 全部收編 | createWorld() fixture | |
 | 4 | entities / targeting / combat | combat：護盾吸收、無敵、核心保護、反傷、處決、leech、塔仇恨 | |
 | 5 | skills 技能表資料化 + ai | skills：各技能的傷害／位移／CD | |
@@ -119,6 +131,12 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
     的單次推擠相加，玩家有機會卡進樹裡後完全無法用右鍵移動。修法是平滑失敗時
     退回逐格路徑，或先把起點投影到最近的可站立點。
     現況記錄於 `tests/navigation.test.ts`。
+
+## 分層守門
+
+`tests/architecture.test.ts` 會掃過 `src/core/` 每一個檔案，確認它們沒有
+import 任何帶 `three` 的模組、沒有引用 `document` / `window` / `matchMedia`
+等瀏覽器全域物件。這條線靠紀律守不住，讓它在 CI 上直接紅掉比較實際。
 
 ## 等價性驗證
 
