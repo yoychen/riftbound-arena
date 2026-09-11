@@ -73,7 +73,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 階段 | 內容 | 測試產出 | 狀態 |
 |---|---|---|---|
 | 0 | Vite + Vitest 進場，vendor/three → three@0.180，scripts/*.mjs 退役 | 冒煙測試 | ✅ |
-| 1 | 抽 vec / rng / config / navigation | navigation：直線可走、繞障礙、不可達回空、平滑後節點數下降 | |
+| 1 | 抽 vec / rng / navigation | navigation 13 項：直線可走、繞障礙、缺口穿越、不可達回空、平滑後節點數下降、通行表只算一次 | ✅ |
 | 2 | **解耦手術**：facing 欄位 + 事件佇列 | 事件佇列快照 | |
 | 3 | World 容器，module-level let 全部收編 | createWorld() fixture | |
 | 4 | entities / targeting / combat | combat：護盾吸收、無敵、核心保護、反傷、處決、leech、塔仇恨 | |
@@ -94,8 +94,9 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 
 ## 既知問題（階段 7 處理）
 
-1. **`planPath()` 效能** — `accessible()` 線性掃描 2891 格點 × 數百障礙物，且
-   `free` memo 每次點擊重建。應在載入時預算成靜態通行表。
+1. ~~**`planPath()` 效能**~~ — 已於階段 1 隨模組抽出一併解決：格點通行表改為
+   `Uint8Array` 並在導航實例內快取，不再每次點擊重建。演算法與結果未變動，
+   只有計算時機改變。A* 的 open set 仍是 O(n) 線性取最小值，量級已不重要。
 2. **`updateHud()` 每幀重寫 innerHTML** 並重跑 `querySelectorAll`。應快取節點、
    髒值才寫。
 3. **`damage()` 無敵判定順序錯誤** — `invuln` 檢查在 reflect 之後，導致對閃避中的
@@ -108,3 +109,8 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 8. **`enemies()`/`targetFor()` 每幀 O(n²) 配置** — 應改就地迴圈。
 9. **進化 id `bounce` 跨英雄重複**（射手連鎖飛矢／法師電弧法球）。目前無害，
    因為一局只取單一英雄的池，但讓「id 全域唯一」假設失效。
+10. **起點卡在障礙物內時 `planPath()` 回傳空陣列** — 路徑平滑要求「從起點看得見
+    第一個節點」，在障礙物內部無法滿足，遊戲會誤報「這個位置無法抵達」。與 #7
+    的單次推擠相加，玩家有機會卡進樹裡後完全無法用右鍵移動。修法是平滑失敗時
+    退回逐格路徑，或先把起點投影到最近的可站立點。
+    現況記錄於 `tests/navigation.test.ts`。

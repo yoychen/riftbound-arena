@@ -25,7 +25,9 @@ describe("遊戲資料", () => {
 
   it("進化的 apply() 只改動傳入的實體", () => {
     const entity = { mods: {}, maxHp: 1000, hp: 500 };
-    commonUpgrades.find((u) => u.id === "vital").apply(entity);
+    const vital = commonUpgrades.find((u) => u.id === "vital");
+    expect(vital).toBeDefined();
+    vital!.apply(entity);
     expect(entity.maxHp).toBe(1350);
     expect(entity.hp).toBe(1350);
   });
