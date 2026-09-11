@@ -88,7 +88,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 1 | 抽 vec / rng / navigation | navigation 13 項：直線可走、繞障礙、缺口穿越、不可達回空、平滑後節點數下降、通行表只算一次 | ✅ |
 | 2 | **解耦手術**：facing 欄位 + 事件佇列 + syncModels | 事件佇列 4 項、架構邊界守門 9 項 | ✅ |
 | 3 | World 容器，module-level let 全部收編；傷害數字改走事件 | world 3 項 | ✅ |
-| 4 | entities / targeting / combat | combat：護盾吸收、無敵、核心保護、反傷、處決、leech、塔仇恨 | |
+| 4 | entities / targeting / combat | combat 25、kill 15、targeting 9、entities 7 | ✅ |
 | 5 | skills 技能表資料化 + ai | skills：各技能的傷害／位移／CD | |
 | 6 | render / ui / input 拆檔 | 手動驗證為主 | |
 | 7 | 修既知問題（見下） | 迴歸測試護網已就位 + 差異比對 | |
@@ -160,6 +160,24 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 傷害數字原本是 `floaters.push(...)`，寫在 `damage()` 裡。雖然它是純資料不帶
 THREE，但屬於呈現層，因此改成 `damage` 事件，由呈現層自行保管生命週期。
 這是 `damage()` 搬進核心層前的最後一個依賴。
+
+## 階段 4 的兩項結構調整
+
+**事件佇列移進 World。** 核心層的戰鬥邏輯需要送出特效與提示，把佇列掛在
+`world.events` 比多傳一個參數乾淨。它是模擬的「輸出」而非呈現層狀態，
+所以不違反 World 的收納原則。
+
+**新增兩個通知事件。** `kill()` 原本直接寫 `mouseDown = false`（輸入狀態）
+與呼叫 `endGame()`（UI）。改成送出 `playerDeath` 與 `matchEnd`，由呈現層
+決定怎麼反應。
+
+`addUnit` 拆成兩層：核心的 `createUnit` 決定數值與實體結構，`game.js` 的
+薄包裝負責掛上模型。原本四個欄位各自寫一串五層巢狀三元運算子，現在是一張
+`UNIT_STATS` 表，小兵那一列是函式因為它隨戰鬥時間成長。
+
+`targetFor` 從「排序後取第一個」改成單趟最小值掃描，省下每次呼叫的陣列配置
+與排序。這是演算法變更，因此以差異比對驗證：1200 組隨機戰局，新舊實作選出
+的目標不一致 0 組。
 
 ## 分層守門
 

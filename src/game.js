@@ -4,8 +4,10 @@ import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
 import { clamp, clock, dist, rand } from "./core/vec.js";
 import { createRng, TERRAIN_SEED } from "./core/rng.js";
 import { createNavigation } from "./core/navigation.js";
-import { createEventQueue } from "./core/events.js";
 import { createWorld } from "./core/world.js";
+import { createUnit } from "./core/entities.js";
+import { enemies, targetFor } from "./core/targeting.js";
+import { damage, kill } from "./core/combat.js";
 const $ = (id) => document.getElementById(id);
 
 let renderer;
@@ -278,10 +280,11 @@ let mouseDown = false,
   touchVector = { x: 0, z: 0 };
 const coarse = matchMedia("(pointer:coarse)").matches;
 /**
- * 副作用佇列。ringFx / burst / announce / feed / tone 只負責描述「要發生什麼」，
+ * 副作用發射器。ringFx / burst / announce / feed / tone 只負責描述「要發生什麼」，
  * 真正的 THREE 與 DOM 操作集中在 handleEvent，每幀 drain 一次。
+ * 佇列本身掛在 world 上，核心層的戰鬥邏輯也往同一條管線送。
  */
-const events = createEventQueue();
+const events = world.events;
 const ringFx = (x, z, r, color, life = 0.45) =>
   events.emit({ type: "ring", x, z, r, color, life });
 const burst = (x, z, color, count = 10) =>
@@ -301,6 +304,11 @@ function handleEvent(event) {
       return playBurst(event.x, event.z, event.color, event.count);
     case "damage":
       return showDamageNumber(event.x, event.z, event.text, event.color);
+    case "playerDeath":
+      mouseDown = false;
+      return;
+    case "matchEnd":
+      return endGame(event.win);
     case "announce":
       return showAnnounce(event.text);
     case "feed":
@@ -478,68 +486,17 @@ function unitModel(type, team, hero = 0) {
   ring.material.side = THREE.DoubleSide;
   return root;
 }
+/**
+ * 建立單位並掛上模型。
+ *
+ * 數值與實體結構由核心層決定，這裡只負責補上 THREE 的部分 ——
+ * 模擬層從不讀取 `model`。
+ */
 function addUnit(type, team, x, z, hero = 0, lane = 0) {
-  const h = HEROES[hero];
-  const hp =
-    type === "hero"
-      ? h.hp
-      : type === "tower"
-        ? 3600
-        : type === "core"
-          ? 6000
-          : type === "boss"
-            ? 3800
-            : 240 + world.time * 0.18;
-  const e = {
-    id: world.nextId++,
-    type,
-    team,
-    x,
-    z,
-    hero,
-    lane,
-    hp,
-    maxHp: hp,
-    damage:
-      type === "hero"
-        ? h.damage
-        : type === "tower"
-          ? 115
-          : type === "core"
-            ? 90
-            : type === "boss"
-              ? 115
-              : 22 + world.time * 0.018,
-    range:
-      type === "hero"
-        ? h.range
-        : type === "tower"
-          ? 11
-          : type === "core"
-            ? 10
-            : type === "boss"
-              ? 5
-              : 2.8,
-    speed: type === "hero" ? h.speed : type === "boss" ? 3 : 4.2,
-    attack: 0,
-    /** 面向角度（弧度）。模擬層只寫這個數字，模型旋轉由 syncModels 推導。 */
-    facing: 0,
-    cd: [0, 0, 0, 0],
-    dead: 0,
-    progress: team === 0 ? 0 : 1,
-    level: 1,
-    xp: 0,
-    mods: {},
-    shield: 0,
-    guard: 0,
-    slow: 0,
-    stun: 0,
-    boost: 0,
-    model: unitModel(type, team, hero),
-  };
+  const e = createUnit(world, type, team, x, z, hero, lane);
+  e.model = unitModel(type, team, hero);
   e.model.position.set(x, 0, z);
   worldEntities.add(e.model);
-  world.entities.push(e);
   return e;
 }
 function clearBattle() {
@@ -637,174 +594,6 @@ function showFeed(text) {
   while ($("feed").children.length > 4) $("feed").lastChild.remove();
   setTimeout(() => d.remove(), 8000);
 }
-function enemies(e, range) {
-  return world.entities.filter(
-    (t) =>
-      t !== e &&
-      t.hp > 0 &&
-      t.team !== e.team &&
-      (t.team >= 0 || e.type === "hero") &&
-      dist(e, t) < range,
-  );
-}
-function targetFor(e, r = e.range) {
-  return enemies(e, r).sort((a, b) => {
-    let pa =
-        a.type === "hero"
-          ? 0
-          : a.type === "minion"
-            ? 1
-            : a.type === "boss"
-              ? 3
-              : 2,
-      pb =
-        b.type === "hero"
-          ? 0
-          : b.type === "minion"
-            ? 1
-            : b.type === "boss"
-              ? 3
-              : 2;
-    return (
-      (e.type === "tower"
-        ? (a.id === e.aggro ? -5 : a.type === "minion" ? -2 : pa) -
-          (b.id === e.aggro ? -5 : b.type === "minion" ? -2 : pb)
-        : pa - pb) || dist(e, a) - dist(e, b)
-    );
-  })[0];
-}
-function damage(target, n, source, skill = false) {
-  if (target.hp <= 0) return;
-  if (
-    target.type === "core" &&
-    world.entities.some(
-      (e) => e.type === "tower" && e.team === target.team && e.hp > 0,
-    ) &&
-    ![0, 1].some(
-      (l) =>
-        !world.entities.some(
-          (e) =>
-            e.type === "tower" &&
-            e.team === target.team &&
-            e.lane === l &&
-            e.hp > 0,
-        ),
-    )
-  )
-    return;
-  if (source?.type === "boss" && target.type === "core") n *= 0.4;
-  if (
-    source &&
-    source.type !== "boss" &&
-    (target.type === "tower" || target.type === "core")
-  )
-    n *= skill ? 0.28 : 0.55;
-  if (target.guard > 0) {
-    n *= 0.18;
-    if (source && target.mods.reflect) {
-      source.hp = Math.max(1, source.hp - 45);
-      ringFx(source.x, source.z, 1.5, 0x92ead2);
-    }
-  }
-  if (target.invuln > 0) return;
-  if (source) {
-    n *= 1 + (source.mods.power || 0);
-    if (source.mods.execute && target.hp < target.maxHp * 0.35) n *= 1.4;
-    if (skill && source.mods.combo && target.slow > 0) n *= 1.65;
-    if (source.mods.frost) target.slow = Math.max(target.slow, 0.7);
-    if (source.mods.mark && target.type !== "tower" && target.type !== "core") {
-      target.mark = (target.mark || 0) + 1;
-      if (target.mark >= 4) {
-        target.mark = 0;
-        n += 100;
-        ringFx(target.x, target.z, 2, 0xffb96b);
-      }
-    }
-  }
-  let absorb = Math.min(target.shield, n);
-  target.shield -= absorb;
-  n -= absorb;
-  target.hp -= n;
-  target.hit = 0.12;
-  if (source?.isPlayer || target.isPlayer)
-    damageNumber(
-      target.x,
-      target.z,
-      Math.ceil(n),
-      target.isPlayer ? "#ffae9a" : skill ? "#f5d27d" : "#f0f2df",
-    );
-  if (source?.mods.leech)
-    source.hp = Math.min(source.maxHp, source.hp + n * 0.12);
-  if (target.type === "hero" && source?.type === "hero") {
-    for (const t of world.entities)
-      if (
-        t.type === "tower" &&
-        t.team === target.team &&
-        dist(t, source) < t.range
-      )
-        t.aggro = source.id;
-  }
-  if (target.hp <= 0) kill(target, source);
-}
-function kill(e, source) {
-  e.hp = 0;
-  burst(e.x, e.z, e.team === 0 ? 0x70d8d1 : 0xed9b75, 14);
-  if (e.type === "hero") {
-    world.scores[source?.team >= 0 ? source.team : 1 - e.team]++;
-    e.dead = 7 + Math.min(9, world.time / 60);
-    if (e.isPlayer) {
-      world.movePath = [];
-      mouseDown = false;
-      world.deaths++;
-      announce("稍作休息，保留所有進化後復活。");
-    }
-    if (source?.isPlayer) {
-      world.kills++;
-      world.gold += 110;
-      tone(760, 0.14);
-      announce("擊敗英雄！＋110 金幣");
-    }
-    feed(
-      `${source?.type === "hero" ? HEROES[source.hero].name : source?.type === "tower" ? "防禦塔" : "戰場"} 擊敗 ${HEROES[e.hero].name}`,
-    );
-  }
-  if (e.type === "minion") {
-    if (world.player?.hp > 0 && e.team !== world.player.team && dist(world.player, e) < 22) {
-      world.gold += source?.isPlayer ? 23 : 15;
-      world.player.xp += 25;
-    }
-    world.entities
-      .filter(
-        (u) =>
-          u.type === "hero" && u.team !== e.team && u.hp > 0 && dist(u, e) < 22,
-      )
-      .forEach((u) => {
-        if (!u.isPlayer) u.xp += 25;
-      });
-  }
-  if (e.type === "tower") {
-    if (source?.team === 0) world.gold += 200;
-    announce(
-      e.team === 1
-        ? "敵方防禦塔已摧毀！核心道路已開啟。"
-        : "我方防禦塔遭到摧毀！",
-    );
-    feed(e.team === 1 ? "我方摧毀一座防禦塔" : "敵方摧毀一座防禦塔");
-  }
-  if (e.type === "core") {
-    endGame(e.team === 1);
-  }
-  if (e.type === "boss") {
-    if (e.team === -1) {
-      world.capture = { team: source?.team ?? 0, value: 0 };
-      announce("巨獸倒下了！留在巢穴完成 5 秒收服。");
-    } else {
-      world.boss = null;
-      world.bossAt = world.time + 140;
-      announce("攻城巨獸已倒下，下次爭奪即將到來。");
-    }
-  }
-}
 function shoot(e, dir, opts = {}) {
   const len = Math.hypot(dir.x, dir.z) || 1;
   dir = { x: dir.x / len, z: dir.z / len };
@@ -837,12 +626,12 @@ function shoot(e, dir, opts = {}) {
 function direction(e) {
   if (e.isPlayer) {
     if (coarse || !pointerKnown) {
-      let t = targetFor(e, 18);
+      let t = targetFor(world, e, 18);
       if (t) return { x: t.x - e.x, z: t.z - e.z };
     }
     return { x: aim.x - e.x, z: aim.z - e.z };
   }
-  const t = targetFor(e, 18);
+  const t = targetFor(world, e, 18);
   return t
     ? { x: t.x - e.x, z: t.z - e.z }
     : { x: Math.sin(e.facing), z: Math.cos(e.facing) };
@@ -869,9 +658,9 @@ function attack(e) {
       e.team < 0 ? 0xfac57c : teamColors[e.team],
       0.18,
     );
-    for (const t of enemies(e, e.range + 1))
+    for (const t of enemies(world, e, e.range + 1))
       if (((t.x - e.x) * d.x + (t.z - e.z) * d.z) / (dist(e, t) || 1) > -0.1)
-        damage(t, e.damage, e);
+        damage(world, t, e.damage, e);
     if (e.mods.blade)
       shoot(e, d, {
         damage: e.damage * 0.55,
@@ -1016,12 +805,12 @@ function cast(e, slot) {
       const ox = e.x,
         oz = e.z;
       dash(e, d, 6);
-      for (const u of enemies(e, 9)) {
+      for (const u of enemies(world, e, 9)) {
         const ux = u.x - ox,
           uz = u.z - oz,
           along = ux * d.x + uz * d.z;
         if (along > -1 && along < 9 && Math.abs(ux * d.z - uz * d.x) < 3)
-          damage(u, 155, e, true);
+          damage(world, u, 155, e, true);
       }
       ringFx(e.x, e.z, 3.2, h.color);
     }
@@ -1093,8 +882,8 @@ function cast(e, slot) {
   if (e.hero === 3) {
     if (slot === 0) {
       dash(e, d, 7);
-      for (const u of enemies(e, 4.5)) {
-        damage(u, 165, e, true);
+      for (const u of enemies(world, e, 4.5)) {
+        damage(world, u, 165, e, true);
         u.stun = 1.2;
         move(u, d.x * 3, d.z * 3, 1, true);
       }
@@ -1358,7 +1147,7 @@ function nearestProgress(e) {
 }
 function ai(e, dt) {
   if (e.stun > 0) return;
-  let target = targetFor(e, e.type === "hero" ? 18 : e.range + 0.8);
+  let target = targetFor(world, e, e.type === "hero" ? 18 : e.range + 0.8);
   let dest = null,
     speed = e.speed * (e.slow > 0 ? 0.5 : 1);
   if (e.type === "tower" || e.type === "core") {
@@ -1423,7 +1212,7 @@ function ai(e, dt) {
       if (
         target.type === "hero" ||
         target.type === "boss" ||
-        enemies(e, 8).length > 2
+        enemies(world, e, 8).length > 2
       ) {
         if (e.cd[0] <= 0) cast(e, 0);
         if (e.cd[1] <= 0 && (e.hero === 2 || e.hp < e.maxHp * 0.8)) cast(e, 1);
@@ -1473,7 +1262,7 @@ function ai(e, dt) {
               u.team === e.team &&
               dist(e, u) < 10,
           );
-          damage(target, escort ? 440 : 160, e, true);
+          damage(world, target, escort ? 440 : 160, e, true);
           ringFx(e.x, e.z, 6, 0xffc78a);
           tone(100, 0.2);
         }
@@ -1588,7 +1377,7 @@ function update(dt) {
       .filter((e) => e.type === "core" && e.hp > 0)
       .forEach((e) => {
         if (state === "playing")
-          damage(e, dt * (15 + (world.time - 600) * 0.25), null);
+          damage(world, e, dt * (15 + (world.time - 600) * 0.25), null);
       });
     $("phase").textContent = "核心衰減";
   }
@@ -1704,7 +1493,7 @@ function update(dt) {
             : 0.6) +
           p.radius
       ) {
-        damage(t, p.damage, p.source, p.skill);
+        damage(world, t, p.damage, p.source, p.skill);
         if (p.slow) t.slow = p.slow;
         p.hit.add(t.id);
         burst(t.x, t.z, p.source.team === 0 ? 0xa8e6d9 : 0xf7b493, 3);
@@ -1754,7 +1543,7 @@ function update(dt) {
       ringFx(z.x, z.z, z.r, z.source.team === 0 ? 0xb4dfdb : 0xf9a47e, 0.35);
       for (const e of world.entities)
         if (e.hp > 0 && e.team !== z.source.team && dist(e, z) < z.r) {
-          damage(e, z.dmg, z.source, true);
+          damage(world, e, z.dmg, z.source, true);
           e.slow = Math.max(e.slow, z.slow);
           e.stun = Math.max(e.stun, z.stun);
         }
@@ -1772,7 +1561,7 @@ function update(dt) {
   for (const e of world.entities) {
     if (e.hp > 0 && e.mods.thorns) {
       if (e.hadShield && e.shield <= 0) {
-        for (const t of enemies(e, 5)) damage(t, 160, e, true);
+        for (const t of enemies(world, e, 5)) damage(world, t, 160, e, true);
         ringFx(e.x, e.z, 5, 0xe9bb83);
       }
       e.hadShield = e.shield > 0;

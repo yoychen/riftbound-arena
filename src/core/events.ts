@@ -23,6 +23,10 @@ export type GameEvent =
   | { type: "announce"; text: string }
   /** 左上角的戰況訊息。 */
   | { type: "feed"; text: string }
+  /** 玩家陣亡。呈現層藉此停止連續普攻等輸入狀態。 */
+  | { type: "playerDeath" }
+  /** 核心被摧毀，戰局結束。 */
+  | { type: "matchEnd"; win: boolean }
   | {
       type: "sound";
       freq: number;
