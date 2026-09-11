@@ -1,4 +1,4 @@
-import * as THREE from "../vendor/three/three.module.js";
+import * as THREE from "three";
 import { HEROES } from "./data/heroes.js";
 import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
 const $ = (id) => document.getElementById(id),
