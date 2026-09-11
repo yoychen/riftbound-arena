@@ -17,6 +17,8 @@ export type GameEvent =
   | { type: "ring"; x: number; z: number; r: number; color: number; life: number }
   /** 粒子爆散。 */
   | { type: "burst"; x: number; z: number; color: number; count: number }
+  /** 跳出的傷害數字。只在玩家出手或受擊時產生。 */
+  | { type: "damage"; x: number; z: number; text: number; color: string }
   /** 畫面中央的大字提示。 */
   | { type: "announce"; text: string }
   /** 左上角的戰況訊息。 */

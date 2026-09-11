@@ -5,6 +5,7 @@ import { clamp, clock, dist, rand } from "./core/vec.js";
 import { createRng, TERRAIN_SEED } from "./core/rng.js";
 import { createNavigation } from "./core/navigation.js";
 import { createEventQueue } from "./core/events.js";
+import { createWorld } from "./core/world.js";
 const $ = (id) => document.getElementById(id);
 
 let renderer;
@@ -255,30 +256,13 @@ for (let team = 0; team < 2; team++) {
 }
 const worldEntities = new THREE.Group();
 scene.add(worldEntities);
-let entities = [],
-  projectiles = [],
-  effects = [],
-  zones = [],
+/** 這一局的模擬狀態。特效、鏡頭、音訊與 UI 狀態機不在裡面。 */
+const world = createWorld();
+let effects = [],
   floaters = [],
-  player = null,
   state = "select",
   selected = 0,
-  time = 0,
-  waveAt = 0,
-  bossAt = 180,
-  boss = null,
-  capture = null,
-  scores = [0, 0],
-  gold = 0,
-  kills = 0,
-  deaths = 0,
-  evoIndex = 0,
-  rerolls = 2,
-  chosen = [],
   toastUntil = 0,
-  ping = null,
-  nextId = 1,
-  shopBuys = 0,
   viewTarget = new THREE.Vector3(),
   last = performance.now(),
   muted = false,
@@ -289,7 +273,6 @@ const keys = new Set(),
   ray = new THREE.Raycaster(),
   ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 let attackPointerId = null;
-let movePath = [];
 let mouseDown = false,
   pointerKnown = false,
   touchVector = { x: 0, z: 0 };
@@ -303,6 +286,8 @@ const ringFx = (x, z, r, color, life = 0.45) =>
   events.emit({ type: "ring", x, z, r, color, life });
 const burst = (x, z, color, count = 10) =>
   events.emit({ type: "burst", x, z, color, count });
+const damageNumber = (x, z, text, color) =>
+  events.emit({ type: "damage", x, z, text, color });
 const announce = (text) => events.emit({ type: "announce", text });
 const feed = (text) => events.emit({ type: "feed", text });
 const tone = (freq = 400, duration = 0.06, volume = 0.025, wave = "sine") =>
@@ -314,6 +299,8 @@ function handleEvent(event) {
       return playRing(event.x, event.z, event.r, event.color, event.life);
     case "burst":
       return playBurst(event.x, event.z, event.color, event.count);
+    case "damage":
+      return showDamageNumber(event.x, event.z, event.text, event.color);
     case "announce":
       return showAnnounce(event.text);
     case "feed":
@@ -502,9 +489,9 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
           ? 6000
           : type === "boss"
             ? 3800
-            : 240 + time * 0.18;
+            : 240 + world.time * 0.18;
   const e = {
-    id: nextId++,
+    id: world.nextId++,
     type,
     team,
     x,
@@ -522,7 +509,7 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
             ? 90
             : type === "boss"
               ? 115
-              : 22 + time * 0.018,
+              : 22 + world.time * 0.018,
     range:
       type === "hero"
         ? h.range
@@ -552,40 +539,40 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
   };
   e.model.position.set(x, 0, z);
   worldEntities.add(e.model);
-  entities.push(e);
+  world.entities.push(e);
   return e;
 }
 function clearBattle() {
-  for (const e of [...entities, ...projectiles, ...effects])
+  for (const e of [...world.entities, ...world.projectiles, ...effects])
     if (e.model) {
       scene.remove(e.model);
       worldEntities.remove(e.model);
     }
-  for (const z of zones) scene.remove(z.model);
-  entities = [];
-  projectiles = [];
+  for (const z of world.zones) scene.remove(z.model);
+  world.entities = [];
+  world.projectiles = [];
   effects = [];
-  zones = [];
+  world.zones = [];
   floaters = [];
 }
 function setupBattle(hero) {
-  movePath = [];
+  world.movePath = [];
   events.clear();
   clearBattle();
-  time = 0;
-  waveAt = 1;
-  bossAt = 180;
-  boss = null;
-  capture = null;
-  scores = [0, 0];
-  gold = 250;
-  kills = 0;
-  deaths = 0;
-  evoIndex = 0;
-  rerolls = 2;
-  chosen = [];
-  shopBuys = 0;
-  ping = null;
+  world.time = 0;
+  world.waveAt = 1;
+  world.bossAt = 180;
+  world.boss = null;
+  world.capture = null;
+  world.scores = [0, 0];
+  world.gold = 250;
+  world.kills = 0;
+  world.deaths = 0;
+  world.evoIndex = 0;
+  world.rerolls = 2;
+  world.chosen = [];
+  world.shopBuys = 0;
+  world.ping = null;
   for (let t = 0; t < 2; t++) {
     addUnit("core", t, bases[t].x, bases[t].z);
     for (let l = 0; l < 2; l++) {
@@ -593,13 +580,13 @@ function setupBattle(hero) {
       addUnit("tower", t, p.x, p.z, 0, l);
     }
   }
-  player = addUnit("hero", 0, -31, 23, hero, 0);
-  player.isPlayer = true;
+  world.player = addUnit("hero", 0, -31, 23, hero, 0);
+  world.player.isPlayer = true;
   for (let i = 0; i < 2; i++)
     addUnit("hero", 0, -33 + i * 3, 20, (hero + i + 1) % 4, i);
   for (let i = 0; i < 3; i++)
     addUnit("hero", 1, 30 + i * 2, -22, (hero + i + 1) % 4, i % 2);
-  viewTarget.set(player.x, 0, player.z);
+  viewTarget.set(world.player.x, 0, world.player.z);
   $("evolutions").innerHTML = "";
   $("feed").innerHTML = "";
   buildSkills();
@@ -634,6 +621,10 @@ function playBurst(x, z, color, count = 10) {
     });
   }
 }
+/** 傷害數字由呈現層自行保管生命週期，模擬只負責說「這裡跳一個數字」。 */
+function showDamageNumber(x, z, text, color) {
+  floaters.push({ x, z, y: 2.8, text, life: 0.8, color });
+}
 function showAnnounce(text) {
   $("toast").textContent = text;
   $("toast").classList.add("show");
@@ -647,7 +638,7 @@ function showFeed(text) {
   setTimeout(() => d.remove(), 8000);
 }
 function enemies(e, range) {
-  return entities.filter(
+  return world.entities.filter(
     (t) =>
       t !== e &&
       t.hp > 0 &&
@@ -686,12 +677,12 @@ function damage(target, n, source, skill = false) {
   if (target.hp <= 0) return;
   if (
     target.type === "core" &&
-    entities.some(
+    world.entities.some(
       (e) => e.type === "tower" && e.team === target.team && e.hp > 0,
     ) &&
     ![0, 1].some(
       (l) =>
-        !entities.some(
+        !world.entities.some(
           (e) =>
             e.type === "tower" &&
             e.team === target.team &&
@@ -736,18 +727,16 @@ function damage(target, n, source, skill = false) {
   target.hp -= n;
   target.hit = 0.12;
   if (source?.isPlayer || target.isPlayer)
-    floaters.push({
-      x: target.x,
-      z: target.z,
-      y: 2.8,
-      text: Math.ceil(n),
-      life: 0.8,
-      color: target.isPlayer ? "#ffae9a" : skill ? "#f5d27d" : "#f0f2df",
-    });
+    damageNumber(
+      target.x,
+      target.z,
+      Math.ceil(n),
+      target.isPlayer ? "#ffae9a" : skill ? "#f5d27d" : "#f0f2df",
+    );
   if (source?.mods.leech)
     source.hp = Math.min(source.maxHp, source.hp + n * 0.12);
   if (target.type === "hero" && source?.type === "hero") {
-    for (const t of entities)
+    for (const t of world.entities)
       if (
         t.type === "tower" &&
         t.team === target.team &&
@@ -761,17 +750,17 @@ function kill(e, source) {
   e.hp = 0;
   burst(e.x, e.z, e.team === 0 ? 0x70d8d1 : 0xed9b75, 14);
   if (e.type === "hero") {
-    scores[source?.team >= 0 ? source.team : 1 - e.team]++;
-    e.dead = 7 + Math.min(9, time / 60);
+    world.scores[source?.team >= 0 ? source.team : 1 - e.team]++;
+    e.dead = 7 + Math.min(9, world.time / 60);
     if (e.isPlayer) {
-      movePath = [];
+      world.movePath = [];
       mouseDown = false;
-      deaths++;
+      world.deaths++;
       announce("稍作休息，保留所有進化後復活。");
     }
     if (source?.isPlayer) {
-      kills++;
-      gold += 110;
+      world.kills++;
+      world.gold += 110;
       tone(760, 0.14);
       announce("擊敗英雄！＋110 金幣");
     }
@@ -780,11 +769,11 @@ function kill(e, source) {
     );
   }
   if (e.type === "minion") {
-    if (player?.hp > 0 && e.team !== player.team && dist(player, e) < 22) {
-      gold += source?.isPlayer ? 23 : 15;
-      player.xp += 25;
+    if (world.player?.hp > 0 && e.team !== world.player.team && dist(world.player, e) < 22) {
+      world.gold += source?.isPlayer ? 23 : 15;
+      world.player.xp += 25;
     }
-    entities
+    world.entities
       .filter(
         (u) =>
           u.type === "hero" && u.team !== e.team && u.hp > 0 && dist(u, e) < 22,
@@ -794,7 +783,7 @@ function kill(e, source) {
       });
   }
   if (e.type === "tower") {
-    if (source?.team === 0) gold += 200;
+    if (source?.team === 0) world.gold += 200;
     announce(
       e.team === 1
         ? "敵方防禦塔已摧毀！核心道路已開啟。"
@@ -807,11 +796,11 @@ function kill(e, source) {
   }
   if (e.type === "boss") {
     if (e.team === -1) {
-      capture = { team: source?.team ?? 0, value: 0 };
+      world.capture = { team: source?.team ?? 0, value: 0 };
       announce("巨獸倒下了！留在巢穴完成 5 秒收服。");
     } else {
-      boss = null;
-      bossAt = time + 140;
+      world.boss = null;
+      world.bossAt = world.time + 140;
       announce("攻城巨獸已倒下，下次爭奪即將到來。");
     }
   }
@@ -827,7 +816,7 @@ function shoot(e, dir, opts = {}) {
     e.z,
     scene,
   );
-  projectiles.push({
+  world.projectiles.push({
     model,
     x: e.x,
     z: e.z,
@@ -935,16 +924,16 @@ const navigation = createNavigation(obstacles);
 const planPath = navigation.planPath;
 
 function setMoveDestination(x, z) {
-  if (state !== "playing" || player.hp <= 0) return;
+  if (state !== "playing" || world.player.hp <= 0) return;
   const destination = { x: clamp(x, -43.5, 43.5), z: clamp(z, -35.5, 35.5) };
-  movePath = planPath(player, destination);
-  if (movePath.length) {
-    const end = movePath.at(-1);
+  world.movePath = planPath(world.player, destination);
+  if (world.movePath.length) {
+    const end = world.movePath.at(-1);
     ringFx(end.x, end.z, 0.85, 0xf2dfa1, 0.65);
   } else announce("這個位置無法抵達，請點選附近空地。");
 }
 function dash(e, d, length = 6) {
-  if (e.isPlayer) movePath = [];
+  if (e.isPlayer) world.movePath = [];
   const n = Math.hypot(d.x, d.z) || 1;
   const ox = e.x,
     oz = e.z;
@@ -981,7 +970,7 @@ function addZone(
   m.rotation.x = -Math.PI / 2;
   m.position.set(x, 0.12, z);
   scene.add(m);
-  zones.push({
+  world.zones.push({
     x,
     z,
     r,
@@ -1134,8 +1123,8 @@ function cast(e, slot) {
 }
 
 function upgradePool() {
-  let a = [...heroUpgrades[player.hero], ...commonUpgrades];
-  if (evoIndex === 1 || evoIndex === 3)
+  let a = [...heroUpgrades[world.player.hero], ...commonUpgrades];
+  if (world.evoIndex === 1 || world.evoIndex === 3)
     a = [
       ...a,
       {
@@ -1146,7 +1135,7 @@ function upgradePool() {
         apply: (e) => (e.mods.mega = true),
       },
     ];
-  return a.filter((u) => !chosen.some((c) => c.id === u.id));
+  return a.filter((u) => !world.chosen.some((c) => c.id === u.id));
 }
 function showUpgrade() {
   state = "upgrade";
@@ -1154,7 +1143,7 @@ function showUpgrade() {
   mouseDown = false;
   let pool = upgradePool();
   let picks = [];
-  if ((evoIndex === 1 || evoIndex === 3) && pool.some((u) => u.id === "mega"))
+  if ((world.evoIndex === 1 || world.evoIndex === 3) && pool.some((u) => u.id === "mega"))
     picks.push(
       pool.splice(
         pool.findIndex((u) => u.id === "mega"),
@@ -1163,7 +1152,7 @@ function showUpgrade() {
     );
   else {
     let spec = pool.filter((u) =>
-      heroUpgrades[player.hero].some((h) => h.id === u.id),
+      heroUpgrades[world.player.hero].some((h) => h.id === u.id),
     );
     if (spec.length) {
       let p = spec[Math.floor(Math.random() * spec.length)];
@@ -1175,15 +1164,15 @@ function showUpgrade() {
     picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
   $("overlay").classList.remove("hidden");
   $("overlay").innerHTML =
-    `<section class="modal"><span class="eyebrow">EVOLUTION ${String(evoIndex + 1).padStart(2, "0")} / 05 · 戰場已暫停</span><h2>${evoIndex === 1 || evoIndex === 3 ? "迎接你的關鍵進化" : "選擇你的進化"}</h2><p>這場戰鬥，由你定義。選擇一項能力，保留至本局結束。</p><div class="choices">${picks.map((u, i) => `<button class="choice" data-choice="${i}"><small>${heroUpgrades[player.hero].some((h) => h.id === u.id) ? "英雄專屬" : u.id === "mega" ? "終極進化" : "共通祝福"}　${u.icon}</small><b>${u.name}</b><p>${u.desc}</p></button>`).join("")}</div><div class="modal-actions"><button id="reroll" ${rerolls <= 0 ? "disabled" : ""}>↻ 重抽選項 · 剩餘 ${rerolls} 次</button></div></section>`;
+    `<section class="modal"><span class="eyebrow">EVOLUTION ${String(world.evoIndex + 1).padStart(2, "0")} / 05 · 戰場已暫停</span><h2>${world.evoIndex === 1 || world.evoIndex === 3 ? "迎接你的關鍵進化" : "選擇你的進化"}</h2><p>這場戰鬥，由你定義。選擇一項能力，保留至本局結束。</p><div class="choices">${picks.map((u, i) => `<button class="choice" data-choice="${i}"><small>${heroUpgrades[world.player.hero].some((h) => h.id === u.id) ? "英雄專屬" : u.id === "mega" ? "終極進化" : "共通祝福"}　${u.icon}</small><b>${u.name}</b><p>${u.desc}</p></button>`).join("")}</div><div class="modal-actions"><button id="reroll" ${world.rerolls <= 0 ? "disabled" : ""}>↻ 重抽選項 · 剩餘 ${world.rerolls} 次</button></div></section>`;
   document.querySelectorAll("[data-choice]").forEach(
     (b) =>
       (b.onclick = () => {
         let u = picks[+b.dataset.choice];
-        u.apply(player);
-        chosen.push(u);
-        evoIndex++;
-        $("evolutions").innerHTML = chosen
+        u.apply(world.player);
+        world.chosen.push(u);
+        world.evoIndex++;
+        $("evolutions").innerHTML = world.chosen
           .map((u) => `<span title="${u.desc}">${u.icon} ${u.name}</span>`)
           .join("");
         resume();
@@ -1192,14 +1181,14 @@ function showUpgrade() {
       }),
   );
   $("reroll").onclick = () => {
-    if (rerolls > 0) {
-      rerolls--;
+    if (world.rerolls > 0) {
+      world.rerolls--;
       showUpgrade();
     }
   };
 }
 function buildSkills() {
-  const h = HEROES[player.hero];
+  const h = HEROES[world.player.hero];
   $("heroBadge").textContent = h.icon;
   $("heroName").textContent = h.name;
   $("skills").innerHTML = [...h.skills, "閃避"]
@@ -1212,10 +1201,10 @@ function buildSkills() {
     b.onpointerdown = (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      cast(player, +b.dataset.skill);
+      cast(world.player, +b.dataset.skill);
     };
     b.onclick = (e) => {
-      if (e.detail === 0) cast(player, +b.dataset.skill);
+      if (e.detail === 0) cast(world.player, +b.dataset.skill);
     };
   });
 }
@@ -1256,7 +1245,7 @@ function startGame(h) {
   return { hero: HEROES[h].name, state };
 }
 function resume() {
-  movePath = [];
+  world.movePath = [];
   state = "playing";
   $("overlay").classList.add("hidden");
   mouseDown = false;
@@ -1269,7 +1258,7 @@ function pauseGame() {
   }
   if (state !== "playing") return;
   state = "paused";
-  movePath = [];
+  world.movePath = [];
   keys.clear();
   mouseDown = false;
   $("overlay").classList.remove("hidden");
@@ -1280,24 +1269,24 @@ function pauseGame() {
 }
 function showShop() {
   if (state !== "playing") return;
-  if (player.hp <= 0 || dist(player, bases[0]) > 10) {
+  if (world.player.hp <= 0 || dist(world.player, bases[0]) > 10) {
     announce("請返回己方核心附近購買裝備。");
     return;
   }
   state = "shop";
   mouseDown = false;
   keys.clear();
-  const cost = 180 + shopBuys * 100;
+  const cost = 180 + world.shopBuys * 100;
   $("overlay").classList.remove("hidden");
   $("overlay").innerHTML =
-    `<section class="modal"><span class="eyebrow">基地補給 · 戰場已暫停</span><h2>準備下一波進攻</h2><p>金幣 ◈ ${Math.floor(gold)}　·　每次購買後，下一件裝備價格提高。</p><div class="choices">${[
+    `<section class="modal"><span class="eyebrow">基地補給 · 戰場已暫停</span><h2>準備下一波進攻</h2><p>金幣 ◈ ${Math.floor(world.gold)}　·　每次購買後，下一件裝備價格提高。</p><div class="choices">${[
       { name: "鋒銳徽章", desc: "所有傷害增加 12%。", icon: "⚔" },
       { name: "守護護符", desc: "最大生命增加 220，恢復生命。", icon: "♡" },
       { name: "疾行長靴", desc: "移動速度增加 8%。", icon: "»" },
     ]
       .map(
         (u, i) =>
-          `<button class="choice" data-buy="${i}" ${gold < cost ? "disabled" : ""}><small>${u.icon}　◈ ${cost}</small><b>${u.name}</b><p>${u.desc}</p></button>`,
+          `<button class="choice" data-buy="${i}" ${world.gold < cost ? "disabled" : ""}><small>${u.icon}　◈ ${cost}</small><b>${u.name}</b><p>${u.desc}</p></button>`,
       )
       .join(
         "",
@@ -1305,16 +1294,16 @@ function showShop() {
   document.querySelectorAll("[data-buy]").forEach(
     (b) =>
       (b.onclick = () => {
-        if (gold < cost) return;
-        gold -= cost;
-        shopBuys++;
+        if (world.gold < cost) return;
+        world.gold -= cost;
+        world.shopBuys++;
         if (+b.dataset.buy === 0)
-          player.mods.power = (player.mods.power || 0) + 0.12;
+          world.player.mods.power = (world.player.mods.power || 0) + 0.12;
         if (+b.dataset.buy === 1) {
-          player.maxHp += 220;
-          player.hp = Math.min(player.maxHp, player.hp + 400);
+          world.player.maxHp += 220;
+          world.player.hp = Math.min(world.player.maxHp, world.player.hp + 400);
         }
-        if (+b.dataset.buy === 2) player.speed *= 1.08;
+        if (+b.dataset.buy === 2) world.player.speed *= 1.08;
         resume();
         announce("裝備已生效！");
         updateHud();
@@ -1329,13 +1318,13 @@ function endGame(win) {
   keys.clear();
   $("overlay").classList.remove("hidden");
   $("overlay").innerHTML =
-    `<section class="modal pause-box"><span class="eyebrow">${win ? "VICTORY" : "DEFEAT"} · ${clock(time)}</span><h2>${win ? "勝利，核心已擊碎！" : "這次，先讓對手一局。"}</h2><p>擊敗 ${kills} 位英雄 · 陣亡 ${deaths} 次<br>獲得 ${chosen.length} 項進化，下局試試另一種組合。</p><div class="instructions">${chosen.length ? chosen.map((u) => u.icon + " " + u.name).join("<br>") : "新的流派，等你探索。"}</div><button id="again" class="primary">再來一局 · 重新選角</button></section>`;
+    `<section class="modal pause-box"><span class="eyebrow">${win ? "VICTORY" : "DEFEAT"} · ${clock(world.time)}</span><h2>${win ? "勝利，核心已擊碎！" : "這次，先讓對手一局。"}</h2><p>擊敗 ${world.kills} 位英雄 · 陣亡 ${world.deaths} 次<br>獲得 ${world.chosen.length} 項進化，下局試試另一種組合。</p><div class="instructions">${world.chosen.length ? world.chosen.map((u) => u.icon + " " + u.name).join("<br>") : "新的流派，等你探索。"}</div><button id="again" class="primary">再來一局 · 重新選角</button></section>`;
   $("again").onclick = startScreen;
 }
 function command(x = aim.x, z = aim.z) {
   if (state !== "playing") return;
-  ping = { x: clamp(x, -43, 43), z: clamp(z, -35, 35), until: time + 13 };
-  ringFx(ping.x, ping.z, 4, 0xf0d795, 1.5);
+  world.ping = { x: clamp(x, -43, 43), z: clamp(z, -35, 35), until: world.time + 13 };
+  ringFx(world.ping.x, world.ping.z, 4, 0xf0d795, 1.5);
   announce("已呼叫隊友集合，指令持續 13 秒。");
   tone(800, 0.1);
 }
@@ -1400,20 +1389,20 @@ function ai(e, dt) {
     } else if (dist(e, bases[e.team]) < 8 && e.hp < e.maxHp * 0.8) {
       dest = bases[e.team];
       target = null;
-    } else if (e.team === 0 && ping && ping.until > time) {
-      dest = ping;
+    } else if (e.team === 0 && world.ping && world.ping.until > world.time) {
+      dest = world.ping;
       if (target && dist(e, target) < e.range) dest = null;
-    } else if (capture && capture.team === e.team) {
+    } else if (world.capture && world.capture.team === e.team) {
       dest = { x: 0, z: 0 };
     } else if (
-      boss?.hp > 0 &&
-      boss.team === -1 &&
-      (time % 180 > 5 || dist(e, boss) < 17)
+      world.boss?.hp > 0 &&
+      world.boss.team === -1 &&
+      (world.time % 180 > 5 || dist(e, world.boss) < 17)
     ) {
-      dest = boss;
-      if (dist(e, boss) < e.range + 1) target = boss;
-    } else if (boss?.hp > 0 && boss.team === e.team && dist(e, boss) < 27) {
-      dest = boss;
+      dest = world.boss;
+      if (dist(e, world.boss) < e.range + 1) target = world.boss;
+    } else if (world.boss?.hp > 0 && world.boss.team === e.team && dist(e, world.boss) < 27) {
+      dest = world.boss;
     } else if (target && dist(e, target) < 14) {
       dest = target;
     } else {
@@ -1438,14 +1427,14 @@ function ai(e, dt) {
       ) {
         if (e.cd[0] <= 0) cast(e, 0);
         if (e.cd[1] <= 0 && (e.hero === 2 || e.hp < e.maxHp * 0.8)) cast(e, 1);
-        if (e.cd[2] <= 0 && time > 22) cast(e, 2);
+        if (e.cd[2] <= 0 && world.time > 22) cast(e, 2);
       }
       if (e.range > 6 && dist(e, target) < 5) {
         dest = { x: e.x - d.x, z: e.z - d.z };
       } else if (e.range > 6 && dist(e, target) < e.range * 0.85)
         dest = {
-          x: e.x + Math.sin(time + e.id) * 2,
-          z: e.z + Math.cos(time * 0.7 + e.id) * 2,
+          x: e.x + Math.sin(world.time + e.id) * 2,
+          z: e.z + Math.cos(world.time * 0.7 + e.id) * 2,
         };
       else dest = null;
     }
@@ -1464,7 +1453,7 @@ function ai(e, dt) {
       );
     }
   } else if (e.type === "boss") {
-    target = entities
+    target = world.entities
       .filter(
         (u) =>
           u.hp > 0 &&
@@ -1477,7 +1466,7 @@ function ai(e, dt) {
         dest = null;
         if (e.attack <= 0) {
           e.attack = 2.4;
-          const escort = entities.some(
+          const escort = world.entities.some(
             (u) =>
               u.type === "hero" &&
               u.hp > 0 &&
@@ -1509,13 +1498,13 @@ function ai(e, dt) {
   } else e.moving = false;
 }
 function claimBoss(team, lane) {
-  if (!boss) return;
-  boss.hp = boss.maxHp = 2700;
-  boss.team = team;
-  boss.lane = lane;
-  boss.facing = team === 0 ? 1 : -2;
-  boss.progress = nearestProgress(boss);
-  capture = null;
+  if (!world.boss) return;
+  world.boss.hp = world.boss.maxHp = 2700;
+  world.boss.team = team;
+  world.boss.lane = lane;
+  world.boss.facing = team === 0 ? 1 : -2;
+  world.boss.progress = nearestProgress(world.boss);
+  world.capture = null;
   ringFx(0, 0, 8, teamColors[team], 2);
   announce(`${team === 0 ? "我方" : "敵方"}收服熔岩龜！護送牠可強化攻城衝撞。`);
   feed(
@@ -1540,26 +1529,26 @@ function routeChoice() {
 }
 function update(dt) {
   if (state !== "playing") return;
-  time += dt;
-  gold += dt * 1.6;
-  if (time >= waveAt) {
+  world.time += dt;
+  world.gold += dt * 1.6;
+  if (world.time >= world.waveAt) {
     spawnWave();
-    waveAt = time + 19;
+    world.waveAt = world.time + 19;
   }
-  if (!boss && !capture && time >= bossAt) {
-    boss = addUnit("boss", -1, 0, 0);
+  if (!world.boss && !world.capture && world.time >= world.bossAt) {
+    world.boss = addUnit("boss", -1, 0, 0);
     announce("熔岩龜甦醒！前往中央爭奪攻城巨獸。");
     tone(160, 0.4);
   }
-  if (capture) {
-    let blue = entities.some(
+  if (world.capture) {
+    let blue = world.entities.some(
         (e) =>
           e.type === "hero" &&
           e.hp > 0 &&
           e.team === 0 &&
           dist(e, { x: 0, z: 0 }) < 8,
       ),
-      red = entities.some(
+      red = world.entities.some(
         (e) =>
           e.type === "hero" &&
           e.hp > 0 &&
@@ -1567,43 +1556,43 @@ function update(dt) {
           dist(e, { x: 0, z: 0 }) < 8,
       );
     if (blue && !red) {
-      if (capture.team !== 0) {
-        capture.team = 0;
-        capture.value = 0;
+      if (world.capture.team !== 0) {
+        world.capture.team = 0;
+        world.capture.value = 0;
       }
-      capture.value += dt;
+      world.capture.value += dt;
     } else if (red && !blue) {
-      if (capture.team !== 1) {
-        capture.team = 1;
-        capture.value = 0;
+      if (world.capture.team !== 1) {
+        world.capture.team = 1;
+        world.capture.value = 0;
       }
-      capture.value += dt;
+      world.capture.value += dt;
     }
-    if (capture.value >= 5) {
-      if (capture.team === 0) routeChoice();
+    if (world.capture.value >= 5) {
+      if (world.capture.team === 0) routeChoice();
       else
         claimBoss(
           1,
-          entities
+          world.entities
             .filter((e) => e.type === "tower" && e.team === 0 && e.hp > 0)
             .sort((a, b) => a.hp - b.hp)[0]?.lane ?? 0,
         );
     }
   }
-  if (evoIndex < 5 && time >= [60, 150, 240, 330, 420][evoIndex]) {
+  if (world.evoIndex < 5 && world.time >= [60, 150, 240, 330, 420][world.evoIndex]) {
     showUpgrade();
     return;
   }
-  if (time > 600) {
-    entities
+  if (world.time > 600) {
+    world.entities
       .filter((e) => e.type === "core" && e.hp > 0)
       .forEach((e) => {
         if (state === "playing")
-          damage(e, dt * (15 + (time - 600) * 0.25), null);
+          damage(e, dt * (15 + (world.time - 600) * 0.25), null);
       });
     $("phase").textContent = "核心衰減";
   }
-  for (const e of entities) {
+  for (const e of world.entities) {
     if (e.hp <= 0) {
       if (e.type === "hero") {
         e.dead -= dt;
@@ -1658,7 +1647,7 @@ function update(dt) {
             Math.hypot(touchVector.x, touchVector.z) > 0;
         e.moving = false;
         if (manualActive) {
-          movePath = [];
+          world.movePath = [];
           if (manualLength > 0)
             move(
               e,
@@ -1666,16 +1655,16 @@ function update(dt) {
               (manualZ / Math.max(1, manualLength)) * speed,
               dt,
             );
-        } else if (movePath.length) {
-          const dest = movePath[0],
+        } else if (world.movePath.length) {
+          const dest = world.movePath[0],
             dx = dest.x - e.x,
             dz = dest.z - e.z,
             d = Math.hypot(dx, dz);
-          if (d < 0.18) movePath.shift();
+          if (d < 0.18) world.movePath.shift();
           else {
             const step = Math.min(speed, d / dt);
             move(e, (dx / d) * step, (dz / d) * step, dt);
-            if (dist(e, dest) < 0.18) movePath.shift();
+            if (dist(e, dest) < 0.18) world.movePath.shift();
           }
         }
         const dir = direction(e);
@@ -1685,7 +1674,7 @@ function update(dt) {
       }
     } else ai(e, dt);
   }
-  for (const p of projectiles) {
+  for (const p of world.projectiles) {
     let step = p.speed * dt;
     let ox = p.x,
       oz = p.z;
@@ -1693,7 +1682,7 @@ function update(dt) {
     p.z += p.dz * step;
     p.left -= step;
     p.model.position.set(p.x, 1.1, p.z);
-    for (const t of entities) {
+    for (const t of world.entities) {
       if (
         t.hp <= 0 ||
         t.team === p.source.team ||
@@ -1720,7 +1709,7 @@ function update(dt) {
         p.hit.add(t.id);
         burst(t.x, t.z, p.source.team === 0 ? 0xa8e6d9 : 0xf7b493, 3);
         if (p.bounce) {
-          const next = entities
+          const next = world.entities
             .filter(
               (e) =>
                 e.hp > 0 &&
@@ -1748,7 +1737,7 @@ function update(dt) {
       }
     }
   }
-  projectiles = projectiles.filter((p) => {
+  world.projectiles = world.projectiles.filter((p) => {
     if (p.left <= 0) {
       scene.remove(p.model);
       p.model.geometry.dispose();
@@ -1756,14 +1745,14 @@ function update(dt) {
     }
     return true;
   });
-  for (const z of zones) {
+  for (const z of world.zones) {
     z.life -= dt;
     z.tick -= dt;
     z.model.material.opacity = z.tick > 0 ? 0.12 : 0.35;
     if (z.tick <= 0) {
       z.tick = 0.65;
       ringFx(z.x, z.z, z.r, z.source.team === 0 ? 0xb4dfdb : 0xf9a47e, 0.35);
-      for (const e of entities)
+      for (const e of world.entities)
         if (e.hp > 0 && e.team !== z.source.team && dist(e, z) < z.r) {
           damage(e, z.dmg, z.source, true);
           e.slow = Math.max(e.slow, z.slow);
@@ -1771,7 +1760,7 @@ function update(dt) {
         }
     }
   }
-  zones = zones.filter((z) => {
+  world.zones = world.zones.filter((z) => {
     if (z.life <= 0) {
       scene.remove(z.model);
       z.model.geometry.dispose();
@@ -1780,7 +1769,7 @@ function update(dt) {
     }
     return true;
   });
-  for (const e of entities) {
+  for (const e of world.entities) {
     if (e.hp > 0 && e.mods.thorns) {
       if (e.hadShield && e.shield <= 0) {
         for (const t of enemies(e, 5)) damage(t, 160, e, true);
@@ -1789,7 +1778,7 @@ function update(dt) {
       e.hadShield = e.shield > 0;
     }
   }
-  entities = entities.filter((e) => {
+  world.entities = world.entities.filter((e) => {
     if (e.hp <= 0 && e.type === "minion") {
       worldEntities.remove(e.model);
       e.model.traverse((o) => o.geometry?.dispose());
@@ -1809,58 +1798,58 @@ function update(dt) {
  * 持有 Object3D，也就能在沒有 WebGL 的環境裡執行與測試。
  */
 function syncModels(dt) {
-  for (const e of entities) {
+  for (const e of world.entities) {
     e.model.visible = e.hp > 0;
     if (e.hp <= 0) continue;
     const bob =
       (e.type === "hero" || e.type === "minion") && e.moving
-        ? Math.abs(Math.sin(time * 14 + e.id)) * 0.13
+        ? Math.abs(Math.sin(world.time * 14 + e.id)) * 0.13
         : 0;
     e.model.position.set(e.x, bob, e.z);
     e.model.rotation.y = e.facing;
     e.model.scale.setScalar(e.hit > 0 ? 1.045 : 1);
     const crystal = e.model.userData.crystal;
     if (crystal) {
-      crystal.rotation.y = time * 0.6;
+      crystal.rotation.y = world.time * 0.6;
       crystal.position.y +=
-        (Math.sin(time * 2) - Math.sin((time - dt) * 2)) * 0.12;
+        (Math.sin(world.time * 2) - Math.sin((world.time - dt) * 2)) * 0.12;
     }
   }
 }
 function updateHud() {
-  if (!player) return;
+  if (!world.player) return;
   $("score").innerHTML =
-    `<b class="blue">${scores[0]}</b><span>VS</span><b class="red">${scores[1]}</b><i></i><time>${clock(time)}</time>`;
-  $("level").textContent = `LV. ${player.level}`;
+    `<b class="blue">${world.scores[0]}</b><span>VS</span><b class="red">${world.scores[1]}</b><i></i><time>${clock(world.time)}</time>`;
+  $("level").textContent = `LV. ${world.player.level}`;
   $("healthFill").style.width =
-    clamp((player.hp / player.maxHp) * 100, 0, 100) + "%";
+    clamp((world.player.hp / world.player.maxHp) * 100, 0, 100) + "%";
   $("healthText").textContent =
-    `${Math.ceil(Math.max(0, player.hp))} / ${player.maxHp}${player.shield > 0 ? " ＋" + Math.ceil(player.shield) : ""}`;
-  $("gold").textContent = "◈ " + Math.floor(gold);
+    `${Math.ceil(Math.max(0, world.player.hp))} / ${world.player.maxHp}${world.player.shield > 0 ? " ＋" + Math.ceil(world.player.shield) : ""}`;
+  $("gold").textContent = "◈ " + Math.floor(world.gold);
   document.querySelectorAll("[data-skill]").forEach((b, i) => {
     const c = b.querySelector(".cool");
-    c.style.display = player.cd[i] > 0.05 ? "grid" : "none";
-    c.textContent = Math.ceil(player.cd[i]);
+    c.style.display = world.player.cd[i] > 0.05 ? "grid" : "none";
+    c.textContent = Math.ceil(world.player.cd[i]);
   });
-  $("bossTitle").textContent = capture
+  $("bossTitle").textContent = world.capture
     ? "巢穴收服中"
-    : boss?.hp > 0
-      ? boss.team < 0
+    : world.boss?.hp > 0
+      ? world.boss.team < 0
         ? "熔岩龜已甦醒"
-        : boss.team === 0
+        : world.boss.team === 0
           ? "護送我方熔岩龜"
           : "攔截敵方熔岩龜"
       : "熔岩龜甦醒";
-  $("bossTime").textContent = capture
-    ? `${capture.team === 0 ? "我方" : "敵方"} ${Math.min(100, Math.floor((capture.value / 5) * 100))}%`
-    : boss?.hp > 0
-      ? boss.team < 0
+  $("bossTime").textContent = world.capture
+    ? `${world.capture.team === 0 ? "我方" : "敵方"} ${Math.min(100, Math.floor((world.capture.value / 5) * 100))}%`
+    : world.boss?.hp > 0
+      ? world.boss.team < 0
         ? "中央巢穴 · 爭奪中"
-        : `生命 ${Math.ceil(boss.hp)} / ${boss.maxHp}`
-      : clock(Math.max(0, bossAt - time));
+        : `生命 ${Math.ceil(world.boss.hp)} / ${world.boss.maxHp}`
+      : clock(Math.max(0, world.bossAt - world.time));
   $("respawn").innerHTML =
-    player.hp <= 0
-      ? `重返戰場<br><b style="font-size:48px">${Math.ceil(Math.max(0, player.dead))}</b>`
+    world.player.hp <= 0
+      ? `重返戰場<br><b style="font-size:48px">${Math.ceil(Math.max(0, world.player.dead))}</b>`
       : "";
 }
 const ctx = $("labels").getContext("2d"),
@@ -1891,7 +1880,7 @@ function screen(x, y, z) {
 function drawLabels() {
   ctx.clearRect(0, 0, W, H);
   if (state === "select") return;
-  for (const e of entities) {
+  for (const e of world.entities) {
     if (e.hp <= 0) continue;
     const p = screen(
       e.x,
@@ -1959,12 +1948,12 @@ function drawLabels() {
     ctx.fillText(f.text, p.x, p.y);
   }
   ctx.globalAlpha = 1;
-  if (ping && time < ping.until) {
-    const p = screen(ping.x, 0.4, ping.z);
+  if (world.ping && world.time < world.ping.until) {
+    const p = screen(world.ping.x, 0.4, world.ping.z);
     ctx.strokeStyle = "#ffe2a2";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 13 + Math.sin(time * 5) * 4, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 13 + Math.sin(world.time * 5) * 4, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = "#ffe2a2";
     ctx.font = "12px sans-serif";
@@ -1999,7 +1988,7 @@ function drawMap() {
   c.beginPath();
   c.arc(mx(0), mz(0), 12, 0, Math.PI * 2);
   c.stroke();
-  for (const e of entities) {
+  for (const e of world.entities) {
     if (e.hp <= 0) continue;
     c.fillStyle = e.isPlayer
       ? "#fff2b6"
@@ -2031,15 +2020,15 @@ function drawMap() {
       c.stroke();
     }
   }
-  if (player && state !== "select") {
+  if (world.player && state !== "select") {
     c.strokeStyle = "#e4ead480";
     c.lineWidth = 1;
-    c.strokeRect(mx(player.x) - 29, mz(player.z) - 22, 58, 44);
+    c.strokeRect(mx(world.player.x) - 29, mz(world.player.z) - 22, 58, 44);
   }
-  if (ping && time < ping.until) {
+  if (world.ping && world.time < world.ping.until) {
     c.strokeStyle = "#ffe2a2";
     c.beginPath();
-    c.arc(mx(ping.x), mz(ping.z), 6 + Math.sin(time * 5) * 2, 0, Math.PI * 2);
+    c.arc(mx(world.ping.x), mz(world.ping.z), 6 + Math.sin(world.time * 5) * 2, 0, Math.PI * 2);
     c.stroke();
   }
 }
@@ -2070,16 +2059,16 @@ function frame(now) {
     viewTarget.lerp(new THREE.Vector3(0, 0, 0), 0.04);
     camera.position.lerp(new THREE.Vector3(4, 68, 57), 0.035);
     camera.lookAt(viewTarget);
-  } else if (player) {
+  } else if (world.player) {
     viewTarget.lerp(
-      new THREE.Vector3(player.x, 0, player.z),
+      new THREE.Vector3(world.player.x, 0, world.player.z),
       1 - Math.exp(-dt * 7),
     );
     camera.position.set(viewTarget.x, 35, viewTarget.z + 29);
     camera.lookAt(viewTarget.x, 0, viewTarget.z - 3);
   }
   aimRing.visible =
-    state === "playing" && pointerKnown && !coarse && player?.hp > 0;
+    state === "playing" && pointerKnown && !coarse && world.player?.hp > 0;
   aimRing.position.set(aim.x, 0.17, aim.z);
   for (const e of effects) {
     if (state === "playing" || state === "ended") {
@@ -2122,7 +2111,7 @@ function pointerAim(e) {
 }
 window.addEventListener("pointermove", pointerAim);
 $("world").addEventListener("pointerdown", (e) => {
-  if (state !== "playing" || player.hp <= 0) return;
+  if (state !== "playing" || world.player.hp <= 0) return;
   pointerAim(e);
   if (e.button === 2) {
     e.preventDefault();
@@ -2130,7 +2119,7 @@ $("world").addEventListener("pointerdown", (e) => {
   } else if (e.button === 0) {
     attackPointerId = e.pointerId;
     mouseDown = true;
-    attack(player);
+    attack(world.player);
     audioCtx?.resume();
   }
 });
@@ -2155,11 +2144,11 @@ window.addEventListener("keydown", (e) => {
   }
   if (state !== "playing") return;
   keys.add(k);
-  if (["w", "a", "s", "d"].includes(k)) movePath = [];
-  if (k === "q") cast(player, 0);
-  if (k === "e") cast(player, 1);
-  if (k === "r") cast(player, 2);
-  if (k === " ") cast(player, 3);
+  if (["w", "a", "s", "d"].includes(k)) world.movePath = [];
+  if (k === "q") cast(world.player, 0);
+  if (k === "e") cast(world.player, 1);
+  if (k === "r") cast(world.player, 2);
+  if (k === " ") cast(world.player, 3);
   if (k === "g") command();
   if (k === "b") showShop();
 });
@@ -2215,11 +2204,11 @@ for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
   });
 $("touchAttack").addEventListener("pointerdown", (e) => {
   e.preventDefault();
-  if (state !== "playing" || player.hp <= 0) return;
+  if (state !== "playing" || world.player.hp <= 0) return;
   attackPointerId = e.pointerId;
   e.currentTarget.setPointerCapture(e.pointerId);
   mouseDown = true;
-  attack(player);
+  attack(world.player);
 });
 for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
   $("touchAttack").addEventListener(event, releaseAttackPointer);
@@ -2242,12 +2231,12 @@ if (document.modelContext?.registerTool) {
       annotations: { readOnlyHint: true },
       execute: () => ({
         state,
-        seconds: Math.floor(time),
-        hero: player ? HEROES[player.hero].name : null,
-        health: player ? Math.ceil(player.hp) : null,
-        score: scores,
-        evolutions: chosen.map((u) => u.name),
-        boss: boss ? { team: boss.team, health: boss.hp } : null,
+        seconds: Math.floor(world.time),
+        hero: world.player ? HEROES[world.player.hero].name : null,
+        health: world.player ? Math.ceil(world.player.hp) : null,
+        score: world.scores,
+        evolutions: world.chosen.map((u) => u.name),
+        boss: world.boss ? { team: world.boss.team, health: world.boss.hp } : null,
       }),
     },
     {

@@ -87,7 +87,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 0 | Vite + Vitest 進場，vendor/three → three@0.180，scripts/*.mjs 退役 | 冒煙測試 | ✅ |
 | 1 | 抽 vec / rng / navigation | navigation 13 項：直線可走、繞障礙、缺口穿越、不可達回空、平滑後節點數下降、通行表只算一次 | ✅ |
 | 2 | **解耦手術**：facing 欄位 + 事件佇列 + syncModels | 事件佇列 4 項、架構邊界守門 9 項 | ✅ |
-| 3 | World 容器，module-level let 全部收編 | createWorld() fixture | |
+| 3 | World 容器，module-level let 全部收編；傷害數字改走事件 | world 3 項 | ✅ |
 | 4 | entities / targeting / combat | combat：護盾吸收、無敵、核心保護、反傷、處決、leech、塔仇恨 | |
 | 5 | skills 技能表資料化 + ai | skills：各技能的傷害／位移／CD | |
 | 6 | render / ui / input 拆檔 | 手動驗證為主 | |
@@ -131,6 +131,35 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
     的單次推擠相加，玩家有機會卡進樹裡後完全無法用右鍵移動。修法是平滑失敗時
     退回逐格路徑，或先把起點投影到最近的可站立點。
     現況記錄於 `tests/navigation.test.ts`。
+
+## 階段 3 的做法：用 AST 而非文字取代
+
+要搬的識別字裡有 `time`、`boss`、`player`、`capture` 這些字，它們同時出現在
+字串（`e.type === "boss"`）、物件鍵、成員屬性名裡，正規表示式改不動。
+
+專案裝的 TypeScript 7 是原生移植版，只提供執行檔不提供 JS 編譯器 API，
+所以改用 `acorn` 解析 AST，只改寫真正指向模組層變數的 `Identifier` 節點，
+並略過成員屬性名、物件鍵與宣告名稱。事前先掃過一遍確認沒有巢狀作用域的
+同名遮蔽與簡寫屬性，再套用 261 處改寫。
+
+套用後的驗證：重新解析確認語法正確、重跑 codemod 確認沒有殘留的裸識別字、
+比對前後所有字串常值確認沒有一個被誤改（只多出新的 import 路徑與 `"damage"`
+事件名）。codemod 腳本是一次性的，未納入版控。
+
+## World 收什麼、不收什麼
+
+收模擬狀態：實體、投射物、區域、玩家、計時、波次、巨獸、收服、比分、
+集合指令、金幣與進度、待走路徑。
+
+不收呈現層：`effects`（持有 THREE mesh）、`floaters`、`state`（UI 狀態機）、
+`viewTarget`、`toastUntil`、`muted`、`audioCtx`。`tests/world.test.ts` 會斷言
+這些名字沒有出現在容器裡 —— 一旦混進來，戰鬥邏輯就又搬不出瀏覽器了。
+
+`state` 刻意留在外面：它決定「要不要推進模擬」，而不是模擬的一部分。
+
+傷害數字原本是 `floaters.push(...)`，寫在 `damage()` 裡。雖然它是純資料不帶
+THREE，但屬於呈現層，因此改成 `damage` 事件，由呈現層自行保管生命週期。
+這是 `damage()` 搬進核心層前的最後一個依賴。
 
 ## 分層守門
 
