@@ -92,7 +92,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 5 | skills 技能表資料化 + ai + movement | skills 28、ai 27、movement 12 | ✅ |
 | 6 | render / ui / input 拆檔 | 瀏覽器輸入層檢查 9 項 | ✅ |
 | 7 | 修既知問題（見下） | 迴歸測試護網已就位 + 差異比對 | |
-| 8 | 逐檔 .js → .ts，由 core/ 開始 | tsc --noEmit 進 CI | |
+| 8 | 逐檔 .js → .ts | 觸控冒煙檢查 5 項；型別找出一個真實 bug | 進行中 |
 
 階段 2 是樞紐也是唯一的危險點：它之前無法寫有意義的測試，它之後每一步都有網子。
 

@@ -15,7 +15,8 @@
 - `src/styles.css`：完整桌面／手機樣式。
 - `src/core/`：純遊戲邏輯，不依賴 THREE 與 DOM，測試都打在這一層。
 - `tests/`：Vitest 測試。
-- `scripts/smoke-browser.mjs`：Playwright 瀏覽器冒煙檢查。
+- `scripts/smoke-browser.mjs`：Playwright 桌機冒煙檢查。
+- `scripts/smoke-touch.mjs`：Playwright 觸控冒煙檢查。
 - `.git/`：原有 4 筆提交與本次原始碼整理的新增提交。
 - `.openai/hosting.json`：原 Sites 識別及靜態輸出設定，一般靜態主機不需要它。
 
@@ -36,7 +37,8 @@ npm run dev
 npm test          # 跑一次
 npm run test:watch
 npm run typecheck # tsc --noEmit
-npm run smoke     # 瀏覽器冒煙檢查，需另一個終端機先跑 npm run dev
+npm run smoke       # 瀏覽器冒煙檢查，需另一個終端機先跑 npm run dev
+npm run smoke:touch # 觸控裝置的冒煙檢查（搖桿、觸控普攻）
 ```
 
 ## 輸出靜態網站

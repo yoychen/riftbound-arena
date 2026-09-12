@@ -1,10 +1,12 @@
+import type { Waveform } from "../core/events.js";
+
 /**
  * 音效。
  *
  * 全部是即時合成的短音，沒有音檔 —— 所以專案不需要任何資產。
  * 瀏覽器要求使用者互動後才能啟動 AudioContext，因此在進場與點擊時 resume。
  */
-let audioCtx = null;
+let audioCtx: AudioContext | null = null;
 let muted = false;
 
 export const isMuted = () => muted;
@@ -20,7 +22,13 @@ export function toggleMute() {
 export function resumeAudio() {
   if (!audioCtx)
     try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // Safari 舊版只有 webkit 前綴版本。
+      const Ctor =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!Ctor) return;
+      audioCtx = new Ctor();
     } catch {
       return;
     }
@@ -28,7 +36,12 @@ export function resumeAudio() {
 }
 
 /** 合成一個短促的下滑音。靜音或尚未啟動音訊時什麼都不做。 */
-function playTone(freq, duration, volume, type) {
+function playTone(
+  freq: number,
+  duration: number,
+  volume: number,
+  type: Waveform,
+) {
   if (muted || !audioCtx) return;
   const o = audioCtx.createOscillator(),
     g = audioCtx.createGain();

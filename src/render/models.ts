@@ -12,7 +12,7 @@ import { box, cyl, mesh, scene, sphere } from "./renderer.js";
 const worldEntities = new THREE.Group();
 scene.add(worldEntities);
 
-function unitModel(type, team, hero = 0) {
+function unitModel(type: string, team: number, hero = 0): THREE.Group {
   const root = new THREE.Group();
   const c = team < 0 ? 0xcf7446 : teamColors[team];
   if (type === "hero") {
@@ -160,7 +160,7 @@ function unitModel(type, team, hero = 0) {
     0.3,
   );
   ring.rotation.x = -Math.PI / 2;
-  ring.material.side = THREE.DoubleSide;
+  (ring.material as THREE.Material).side = THREE.DoubleSide;
   return root;
 }
 /**
@@ -171,7 +171,7 @@ function unitModel(type, team, hero = 0) {
  */
 
 /** 區域傷害的地面圓盤。模擬只給座標、半徑與顏色。 */
-function zoneMesh(x, z, r, color) {
+function zoneMesh(x: number, z: number, r: number, color: number) {
   const m = new THREE.Mesh(
     new THREE.CircleGeometry(r, 40),
     new THREE.MeshBasicMaterial({
@@ -195,11 +195,12 @@ function zoneMesh(x, z, r, color) {
  * 所以預設只釋放幾何。只有自己 new 出來的材質（區域圓盤、擴散光環）才傳
  * `disposeMaterial`。
  */
-export function disposeModel(model, disposeMaterial = false) {
+export function disposeModel(model: unknown, disposeMaterial = false) {
   if (!model) return;
-  model.traverse((o) => {
-    o.geometry?.dispose();
-    if (disposeMaterial) o.material?.dispose();
+  (model as THREE.Object3D).traverse((o) => {
+    const mesh = o as Partial<THREE.Mesh>;
+    mesh.geometry?.dispose();
+    if (disposeMaterial) (mesh.material as THREE.Material | undefined)?.dispose();
   });
 }
 

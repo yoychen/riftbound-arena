@@ -7,6 +7,7 @@
  * 匯入這個模組就會建好整張地圖（模組層副作用），由 main 負責在對的時機匯入。
  */
 import * as THREE from "three";
+import type { Obstacle } from "../core/navigation.js";
 import { createRng, TERRAIN_SEED } from "../core/rng.js";
 import { TEAM_COLORS } from "../config/colors.js";
 import { box, cyl, mesh, scene, sphere } from "./renderer.js";
@@ -36,9 +37,15 @@ const lanes = [
 ];
 const curves = lanes.map((p) => new THREE.CatmullRomCurve3(p));
 const lanePoints = curves.map((c) => c.getPoints(160));
-function strip(points, width, color, y) {
-  const verts = [],
-    idx = [];
+/** 沿著一串控制點鋪出一條有寬度的帶狀面，用來畫兵線與河流。 */
+function strip(
+  points: THREE.Vector3[],
+  width: number,
+  color: number,
+  y: number,
+) {
+  const verts: number[] = [],
+    idx: number[] = [];
   points.forEach((p, i) => {
     const next = points[Math.min(points.length - 1, i + 1)],
       prev = points[Math.max(0, i - 1)];
@@ -70,7 +77,7 @@ lanePoints.forEach((p) => {
   strip(p, 8, 0x73835a, 0.005);
   strip(p, 6.5, 0xb9b98a, 0.035);
 });
-const river = [];
+const river: THREE.Vector3[] = [];
 for (let i = 0; i <= 100; i++) {
   let x = -46 + i * 0.92;
   river.push(new THREE.Vector3(x, 0, -x * 0.47 + Math.sin(x * 0.12) * 2));
@@ -95,8 +102,9 @@ const pitRing = mesh(
 );
 pitRing.rotation.x = Math.PI / 2;
 const seeded = createRng(TERRAIN_SEED);
-const obstacles = [];
-function nearLane(x, z, d = 6) {
+/** 樹木的碰撞圓。模擬層繞路與推擠都以這份資料為準。 */
+const obstacles: Obstacle[] = [];
+function nearLane(x: number, z: number, d = 6) {
   return lanePoints.some((ps) =>
     ps.some((p, i) => i % 3 === 0 && Math.hypot(x - p.x, z - p.z) < d),
   );
