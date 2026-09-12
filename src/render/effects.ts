@@ -10,9 +10,42 @@ import { mesh, scene, sphere } from "./renderer.js";
 import { disposeModel } from "./models.js";
 import { rand } from "../core/vec.js";
 
-let effects = [];
+/** 網格的材質一律是單一個，不是 THREE 允許的陣列。 */
+type SingleMaterialMesh = THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
 
-function playRing(x, z, r, color, life = 0.45) {
+interface EffectBase {
+  model: SingleMaterialMesh;
+  /** 剩餘壽命（秒）。 */
+  life: number;
+  /** 初始壽命，用來換算進度。 */
+  max: number;
+}
+
+/** 擴散光環：自己持有材質，靠縮放與淡出演出。 */
+interface RingEffect extends EffectBase {
+  expand: true;
+}
+
+/** 爆散粒子：材質來自共用快取，受重力影響。 */
+interface ParticleEffect extends EffectBase {
+  expand?: false;
+  vx: number;
+  vy: number;
+  vz: number;
+}
+
+/** `expand` 同時是形態的判別欄位，兩種效果的欄位因此不會混用。 */
+type Effect = RingEffect | ParticleEffect;
+
+let effects: Effect[] = [];
+
+function playRing(
+  x: number,
+  z: number,
+  r: number,
+  color: number,
+  life = 0.45,
+) {
   const m = new THREE.Mesh(
     new THREE.RingGeometry(r * 0.88, r, 40),
     new THREE.MeshBasicMaterial({
@@ -26,13 +59,13 @@ function playRing(x, z, r, color, life = 0.45) {
   m.rotation.x = -Math.PI / 2;
   m.position.set(x, 0.18, z);
   scene.add(m);
-  effects.push({ model: m, life, max: life, expand: true });
+  effects.push({ model: m as SingleMaterialMesh, life, max: life, expand: true });
 }
-function playBurst(x, z, color, count = 10) {
+function playBurst(x: number, z: number, color: number, count = 10) {
   for (let i = 0; i < count; i++) {
     const m = sphere(0.12, color, x, 0.6, z, scene);
     effects.push({
-      model: m,
+      model: m as SingleMaterialMesh,
       life: rand(0.2, 0.55),
       max: 0.55,
       vx: rand(-7, 7),
@@ -43,7 +76,7 @@ function playBurst(x, z, color, count = 10) {
 }
 
 /** 依 dt 推進特效；`animate` 為假時凍結（暫停畫面）但仍保留。 */
-export function stepEffects(dt, animate) {
+export function stepEffects(dt: number, animate: boolean) {
   for (const e of effects) {
     if (animate) {
       e.life -= dt;

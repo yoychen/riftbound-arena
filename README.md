@@ -4,9 +4,15 @@
 
 ## 原始碼說明
 
-遊戲最初直接以原生 JavaScript、HTML、CSS 撰寫，沒有 TypeScript、React、編譯前模板或 source map。舊提交把手寫原始碼放在 dist/，且排版過度壓縮；後續提交將它搬到 src/ 並重新排版。這不是從 bundle 反編譯，也沒有遺漏另一份 src/。
+遊戲最初以原生 JavaScript、HTML、CSS 撰寫，整份邏輯放在單一個檔案裡。經過一系列重構，現在是 TypeScript 的分層架構：
 
-目前正在進行模組化重構：把 `src/game.js` 拆成 `core/`（純邏輯，不依賴 THREE 與 DOM）、`render/`、`ui/`、`input/` 四層，並為 `core/` 補上測試。進度見 `docs/refactor-plan.md`。
+- `src/core/`：遊戲邏輯。不 import THREE、不碰 DOM，所有測試都打在這一層。
+- `src/render/`：THREE 場景、地形、模型、特效、2D 疊層與小地圖。
+- `src/ui/`：狀態機、覆蓋層畫面、HUD、提示與音效。
+- `src/input/`：鍵盤、滑鼠與觸控。
+- `src/main.ts`：把各層接起來，並跑賽局迴圈。
+
+重構的完整過程與各階段決策見 `docs/refactor-plan.md`。
 
 - `index.html`：遊戲介面與入口。
 - `src/game.js`：Three.js 場景、角色模型、戰鬥、AI、路徑、觸控與遊戲循環。
@@ -15,7 +21,8 @@
 - `src/styles.css`：完整桌面／手機樣式。
 - `src/core/`：純遊戲邏輯，不依賴 THREE 與 DOM，測試都打在這一層。
 - `tests/`：Vitest 測試。
-- `scripts/smoke-browser.mjs`：Playwright 瀏覽器冒煙檢查。
+- `scripts/smoke-browser.mjs`：Playwright 桌機冒煙檢查。
+- `scripts/smoke-touch.mjs`：Playwright 觸控冒煙檢查。
 - `.git/`：原有 4 筆提交與本次原始碼整理的新增提交。
 - `.openai/hosting.json`：原 Sites 識別及靜態輸出設定，一般靜態主機不需要它。
 
@@ -36,7 +43,8 @@ npm run dev
 npm test          # 跑一次
 npm run test:watch
 npm run typecheck # tsc --noEmit
-npm run smoke     # 瀏覽器冒煙檢查，需另一個終端機先跑 npm run dev
+npm run smoke       # 瀏覽器冒煙檢查，需另一個終端機先跑 npm run dev
+npm run smoke:touch # 觸控裝置的冒煙檢查（搖桿、觸控普攻）
 ```
 
 ## 輸出靜態網站

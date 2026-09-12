@@ -1,11 +1,12 @@
 /** 小地圖：兵線、河流、巢穴與所有單位的俯視縮圖。 */
 import { mapCtx as mapctx } from "./renderer.js";
+import type { World } from "../core/world.js";
 import { lanePoints, river } from "./terrain.js";
 
-export function drawMap(world, state) {
+export function drawMap(world: World, state: string) {
   const c = mapctx,
-    mx = (x) => ((x + 47) / 94) * 210,
-    mz = (z) => ((z + 40) / 80) * 168;
+    mx = (x: number) => ((x + 47) / 94) * 210,
+    mz = (z: number) => ((z + 40) / 80) * 168;
   c.fillStyle = "#243e35";
   c.fillRect(0, 0, 210, 168);
   c.strokeStyle = "#477f76";

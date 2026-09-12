@@ -10,18 +10,20 @@
  */
 import * as THREE from "three";
 import { camera, W, H, $ } from "../render/renderer.js";
+import { clamp } from "../core/vec.js";
+import type { Entity, World } from "../core/world.js";
 import { session } from "../ui/session.js";
 
 export const input = {
   /** 游標在地面上的投影點。模擬層直接共用這個 Vector3。 */
   aim: new THREE.Vector3(0, 0, 0),
   mouse: new THREE.Vector2(),
-  keys: new Set(),
+  keys: new Set<string>(),
   mouseDown: false,
   /** 滑鼠是否動過。沒動過就沒有有意義的瞄準點，改為自動鎖定。 */
   pointerKnown: false,
   touchVector: { x: 0, z: 0 },
-  attackPointerId: null,
+  attackPointerId: null as number | null,
   coarse: matchMedia("(pointer:coarse)").matches,
   /** 清空按住狀態，覆蓋層開關時用。 */
   reset() {
@@ -39,6 +41,23 @@ export function refreshAim() {
   ray.ray.intersectPlane(ground, input.aim);
 }
 
+/** 輸入層要回呼的動作。全部由 main 注入，避免與畫面層互相 import。 */
+export interface InputActions {
+  world: World;
+  /** 施放技能槽 0–3。 */
+  playerCast: (slot: number) => void;
+  attack: (world: World, entity: Entity) => void;
+  /** 右鍵點地。 */
+  setMoveDestination: (x: number, z: number) => void;
+  /** 呼叫隊友集合。 */
+  command: (x?: number, z?: number) => void;
+  showShop: () => void;
+  pauseGame: () => void;
+  resume: () => void;
+  resumeAudio: () => void;
+  toggleSound: () => void;
+}
+
 export function bindInput({
   world,
   playerCast,
@@ -50,8 +69,8 @@ export function bindInput({
   resume,
   resumeAudio,
   toggleSound,
-}) {
-function pointerAim(e) {
+}: InputActions) {
+function pointerAim(e: PointerEvent) {
   input.mouse.set((e.clientX / W) * 2 - 1, (-e.clientY / H) * 2 + 1);
   input.pointerKnown = true;
   camera.updateMatrixWorld();
@@ -59,8 +78,16 @@ function pointerAim(e) {
   ray.ray.intersectPlane(ground, input.aim);
 }
 window.addEventListener("pointermove", pointerAim);
+/** 玩家現在能不能操作：在戰鬥中，而且還活著。 */
+function activePlayer(): Entity | null {
+  if (session.state !== "playing") return null;
+  const player = world.player;
+  return player && player.hp > 0 ? player : null;
+}
+
 $("world").addEventListener("pointerdown", (e) => {
-  if (session.state !== "playing" || world.player.hp <= 0) return;
+  const player = activePlayer();
+  if (!player) return;
   pointerAim(e);
   if (e.button === 2) {
     e.preventDefault();
@@ -68,11 +95,11 @@ $("world").addEventListener("pointerdown", (e) => {
   } else if (e.button === 0) {
     input.attackPointerId = e.pointerId;
     input.mouseDown = true;
-    attack(world, world.player);
+    attack(world, player);
     resumeAudio();
   }
 });
-function releaseAttackPointer(e) {
+function releaseAttackPointer(e: PointerEvent) {
   if (e.pointerId === input.attackPointerId) {
     input.attackPointerId = null;
     input.mouseDown = false;
@@ -115,20 +142,22 @@ $("pause").onclick = pauseGame;
 $("sound").onclick = toggleSound;
 $("shopButton").onclick = showShop;
 $("minimap").onclick = (e) => {
-  const r = e.currentTarget.getBoundingClientRect();
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
   command(
     ((e.clientX - r.left) / r.width) * 94 - 47,
     ((e.clientY - r.top) / r.height) * 80 - 40,
   );
 };
-let touchId = null;
+let touchId: number | null = null;
 const joystick = $("touchMove");
-function joy(e) {
+/** 搖桿中央會跟著手指跑的圓點。 */
+const knob = () => joystick.firstElementChild as HTMLElement;
+function joy(e: PointerEvent) {
   const r = joystick.getBoundingClientRect();
   let x = clamp((e.clientX - r.left - r.width / 2) / 36, -1, 1),
     z = clamp((e.clientY - r.top - r.height / 2) / 36, -1, 1);
   input.touchVector = { x, z };
-  joystick.firstChild.style.transform = `translate(${x * 29}px,${z * 29}px)`;
+  knob().style.transform = `translate(${x * 29}px,${z * 29}px)`;
 }
 joystick.addEventListener("pointerdown", (e) => {
   if (touchId !== null) return;
@@ -140,22 +169,27 @@ joystick.addEventListener("pointerdown", (e) => {
 joystick.addEventListener("pointermove", (e) => {
   if (e.pointerId === touchId) joy(e);
 });
+// 手指離開、被系統取消、或指標捕捉被搶走，都要把搖桿歸位。
 for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
-  joystick.addEventListener(event, (e) => {
+  joystick.addEventListener(event, (raw) => {
+    const e = raw as PointerEvent;
     if (e.pointerId !== touchId) return;
     touchId = null;
     input.touchVector = { x: 0, z: 0 };
-    joystick.firstChild.style.transform = "none";
+    knob().style.transform = "none";
   });
 $("touchAttack").addEventListener("pointerdown", (e) => {
   e.preventDefault();
-  if (session.state !== "playing" || world.player.hp <= 0) return;
+  const player = activePlayer();
+  if (!player) return;
   input.attackPointerId = e.pointerId;
-  e.currentTarget.setPointerCapture(e.pointerId);
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   input.mouseDown = true;
-  attack(world, world.player);
+  attack(world, player);
 });
 for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
-  $("touchAttack").addEventListener(event, releaseAttackPointer);
+  $("touchAttack").addEventListener(event, (raw) =>
+    releaseAttackPointer(raw as PointerEvent),
+  );
 
 }

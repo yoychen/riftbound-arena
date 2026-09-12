@@ -190,7 +190,7 @@ describe("進化與裝備的加成", () => {
     const source = spawn(world, "hero", 0, { mods: { mark: true } });
     const tower = spawn(world, "tower", 1, { hp: 3600, maxHp: 3600 });
     for (let i = 0; i < 5; i++) damage(world, tower, 10, source);
-    expect(tower.mark).toBeUndefined();
+    expect(tower.mark).toBe(0);
   });
 
   it("leech 把 12% 傷害轉為生命，且不超過上限", () => {
@@ -300,7 +300,7 @@ describe("無敵的涵蓋範圍", () => {
 
     damage(world, target, 100, source);
     expect(target.slow).toBe(0);
-    expect(target.mark).toBeUndefined();
+    expect(target.mark).toBe(0);
   });
 
   it("無敵期間不會讓攻擊者吸血", () => {

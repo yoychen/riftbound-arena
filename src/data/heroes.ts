@@ -1,5 +1,28 @@
-// Hero stats, skill names, cooldowns and selection-screen descriptions.
-export const HEROES = [
+/** 四位英雄的數值、技能名稱、冷卻與選角畫面的文案。 */
+
+export interface Hero {
+  name: string;
+  /** 選角畫面的定位標籤，例如「近戰・突進・反擊」。 */
+  role: string;
+  icon: string;
+  /** 技能特效的主色。 */
+  color: number;
+  hp: number;
+  damage: number;
+  range: number;
+  speed: number;
+  /** 普攻間隔（秒）。 */
+  rate: number;
+  /** Q / E / R 的名稱。 */
+  skills: [string, string, string];
+  /** 技能格上顯示的符號。 */
+  symbols: [string, string, string];
+  /** Q / E / R 的冷卻秒數。閃避的冷卻是固定的，不在這裡。 */
+  cd: [number, number, number];
+  desc: string;
+}
+
+export const HEROES: Hero[] = [
   {
     name: "逐風劍士",
     role: "近戰・突進・反擊",
