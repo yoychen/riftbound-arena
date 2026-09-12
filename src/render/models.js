@@ -188,4 +188,19 @@ function zoneMesh(x, z, r, color) {
   return m;
 }
 
+/**
+ * 釋放一個模型佔用的 GPU 資源。
+ *
+ * 材質大多來自 `mat()` 的共用快取，釋放掉會讓其他還在場上的單位變成黑色，
+ * 所以預設只釋放幾何。只有自己 new 出來的材質（區域圓盤、擴散光環）才傳
+ * `disposeMaterial`。
+ */
+export function disposeModel(model, disposeMaterial = false) {
+  if (!model) return;
+  model.traverse((o) => {
+    o.geometry?.dispose();
+    if (disposeMaterial) o.material?.dispose();
+  });
+}
+
 export { worldEntities, unitModel, zoneMesh };

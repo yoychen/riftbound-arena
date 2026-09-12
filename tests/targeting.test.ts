@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { enemies, targetFor } from "../src/core/targeting.js";
+import {
+  countEnemies,
+  enemies,
+  forEachEnemy,
+  targetFor,
+} from "../src/core/targeting.js";
 import { makeWorld, spawn } from "./fixtures.js";
 
 describe("選敵範圍", () => {
@@ -92,5 +97,40 @@ describe("防禦塔的目標優先權", () => {
     spawn(world, "hero", 1, { x: 1 });
 
     expect(targetFor(world, tower, 20)).toBe(minion);
+  });
+});
+
+describe("不配置中間陣列的選敵", () => {
+  it("countEnemies 與 enemies 的長度一致", () => {
+    const world = makeWorld();
+    const me = spawn(world, "hero", 0);
+    for (let i = 0; i < 5; i++) spawn(world, "minion", 1, { x: i * 2 });
+    spawn(world, "minion", 1, { x: 40 });
+
+    for (const range of [1, 5, 9, 50])
+      expect(countEnemies(world, me, range)).toBe(
+        enemies(world, me, range).length,
+      );
+  });
+
+  it("forEachEnemy 給的距離與實際距離相符", () => {
+    const world = makeWorld();
+    const me = spawn(world, "hero", 0);
+    const foe = spawn(world, "minion", 1, { x: 3, z: 4 });
+
+    const seen: [unknown, number][] = [];
+    forEachEnemy(world, me, 10, (e, d) => seen.push([e, d]));
+    expect(seen).toEqual([[foe, 5]]);
+  });
+
+  it("targetFor 不會因為改走回呼而改變選擇", () => {
+    const world = makeWorld();
+    const tower = spawn(world, "tower", 0);
+    const minion = spawn(world, "minion", 1, { x: 9 });
+    const raider = spawn(world, "hero", 1, { x: 1 });
+
+    expect(targetFor(world, tower, 20)).toBe(minion);
+    tower.aggro = raider.id;
+    expect(targetFor(world, tower, 20)).toBe(raider);
   });
 });
