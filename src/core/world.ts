@@ -120,12 +120,53 @@ export interface Entity extends Point {
   model?: unknown;
 }
 
+/** 飛行中的投射物。 */
 export interface Projectile extends Point {
-  [key: string]: unknown;
+  /** 單位方向向量。 */
+  dx: number;
+  dz: number;
+  /** 每秒飛行距離。 */
+  speed: number;
+  /** 剩餘射程，歸零就消失。 */
+  left: number;
+  source: Entity;
+  damage: number;
+  /** 穿透：命中後繼續飛行。 */
+  pierce: boolean;
+  /** 已經打到過的目標 id，避免穿透彈重複計算。 */
+  hit: Set<number>;
+  /** 較大的彈體，影響碰撞半徑與外觀。 */
+  big: boolean;
+  radius: number;
+  color: number;
+  /** 命中後施加的緩速秒數。 */
+  slow?: number;
+  /** 是否計為技能傷害。 */
+  skill?: boolean;
+  /** 命中後彈向下一個敵人，只會彈一次。 */
+  bounce: boolean;
+  /** 呈現層掛上的模型，見 Entity.model。 */
+  model?: unknown;
 }
 
+/** 地面上的持續傷害區域。 */
 export interface Zone extends Point {
-  [key: string]: unknown;
+  r: number;
+  /** 剩餘存在時間。 */
+  life: number;
+  /** 初始存在時間，用來換算進度。 */
+  max: number;
+  source: Entity;
+  /** 每次結算的傷害。 */
+  dmg: number;
+  /** 第一次結算前的預告時間，讓對手有機會走開。 */
+  delay: number;
+  /** 距離下次結算還有幾秒。 */
+  tick: number;
+  color: number;
+  slow: number;
+  stun: number;
+  model?: unknown;
 }
 
 /** 中立巨獸的收服進度。 */

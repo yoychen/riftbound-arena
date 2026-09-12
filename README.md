@@ -4,9 +4,15 @@
 
 ## 原始碼說明
 
-遊戲最初直接以原生 JavaScript、HTML、CSS 撰寫，沒有 TypeScript、React、編譯前模板或 source map。舊提交把手寫原始碼放在 dist/，且排版過度壓縮；後續提交將它搬到 src/ 並重新排版。這不是從 bundle 反編譯，也沒有遺漏另一份 src/。
+遊戲最初以原生 JavaScript、HTML、CSS 撰寫，整份邏輯放在單一個檔案裡。經過一系列重構，現在是 TypeScript 的分層架構：
 
-目前正在進行模組化重構：把 `src/game.js` 拆成 `core/`（純邏輯，不依賴 THREE 與 DOM）、`render/`、`ui/`、`input/` 四層，並為 `core/` 補上測試。進度見 `docs/refactor-plan.md`。
+- `src/core/`：遊戲邏輯。不 import THREE、不碰 DOM，所有測試都打在這一層。
+- `src/render/`：THREE 場景、地形、模型、特效、2D 疊層與小地圖。
+- `src/ui/`：狀態機、覆蓋層畫面、HUD、提示與音效。
+- `src/input/`：鍵盤、滑鼠與觸控。
+- `src/main.ts`：把各層接起來，並跑賽局迴圈。
+
+重構的完整過程與各階段決策見 `docs/refactor-plan.md`。
 
 - `index.html`：遊戲介面與入口。
 - `src/game.js`：Three.js 場景、角色模型、戰鬥、AI、路徑、觸控與遊戲循環。

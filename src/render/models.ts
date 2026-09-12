@@ -204,4 +204,14 @@ export function disposeModel(model: unknown, disposeMaterial = false) {
   });
 }
 
+/**
+ * 取出掛在實體上的模型。
+ *
+ * 核心層把 `model` 存成 `unknown` —— 它不該認識 THREE，也從不讀它。
+ * 只有呈現層知道真正的型別，所以轉型集中在這一個地方。
+ */
+export function modelOf(carrier: { model?: unknown }): THREE.Object3D {
+  return carrier.model as THREE.Object3D;
+}
+
 export { worldEntities, unitModel, zoneMesh };
