@@ -50,16 +50,16 @@ export function damage(
   if (target.hp <= 0) return;
   // 無敵要在最前面判：閃避或復活保護期間，這一擊完全不存在 ——
   // 不減傷、不反傷、不上緩速、不觸發任何特效。
-  if ((target.invuln as number) > 0) return;
+  if (target.invuln > 0) return;
   if (target.type === "core" && coreIsShielded(world, target)) return;
 
   let n = amount;
   if (source?.type === "boss" && target.type === "core") n *= 0.4;
   n *= structureReduction(source, target, skill);
 
-  if ((target.guard as number) > 0) {
+  if ((target.guard) > 0) {
     n *= 0.18;
-    if (source && (target.mods as Record<string, unknown>).reflect) {
+    if (source && target.mods.reflect) {
       source.hp = Math.max(1, source.hp - 45);
       world.events.emit({
         type: "ring",
@@ -72,14 +72,14 @@ export function damage(
     }
   }
   if (source) {
-    const mods = source.mods as Record<string, number | boolean | undefined>;
-    n *= 1 + ((mods.power as number) || 0);
+    const mods = source.mods;
+    n *= 1 + ((mods.power) || 0);
     if (mods.execute && target.hp < target.maxHp * 0.35) n *= 1.4;
-    if (skill && mods.combo && (target.slow as number) > 0) n *= 1.65;
-    if (mods.frost) target.slow = Math.max(target.slow as number, 0.7);
+    if (skill && mods.combo && (target.slow) > 0) n *= 1.65;
+    if (mods.frost) target.slow = Math.max(target.slow, 0.7);
     if (mods.mark && target.type !== "tower" && target.type !== "core") {
-      target.mark = ((target.mark as number) || 0) + 1;
-      if ((target.mark as number) >= 4) {
+      target.mark += 1;
+      if (target.mark >= 4) {
         target.mark = 0;
         n += 100;
         world.events.emit({
@@ -94,8 +94,8 @@ export function damage(
     }
   }
 
-  const absorbed = Math.min(target.shield as number, n);
-  target.shield = (target.shield as number) - absorbed;
+  const absorbed = Math.min(target.shield, n);
+  target.shield = (target.shield) - absorbed;
   n -= absorbed;
   target.hp -= n;
   target.hit = 0.12;
@@ -109,7 +109,7 @@ export function damage(
       color: target.isPlayer ? "#ffae9a" : skill ? "#f5d27d" : "#f0f2df",
     });
 
-  if (source && (source.mods as Record<string, unknown>).leech)
+  if (source && source.mods.leech)
     source.hp = Math.min(source.maxHp, source.hp + n * 0.12);
 
   // 英雄互毆時，攻擊方會被守方塔記上仇恨。
@@ -118,7 +118,7 @@ export function damage(
       if (
         tower.type === "tower" &&
         tower.team === target.team &&
-        dist(tower, source) < (tower.range as number)
+        dist(tower, source) < (tower.range)
       )
         tower.aggro = source.id;
 
@@ -174,13 +174,13 @@ function killHero(
 
   const killer =
     source?.type === "hero"
-      ? HEROES[source.hero as number].name
+      ? HEROES[source.hero].name
       : source?.type === "tower"
         ? "防禦塔"
         : "戰場";
   world.events.emit({
     type: "feed",
-    text: `${killer} 擊敗 ${HEROES[entity.hero as number].name}`,
+    text: `${killer} 擊敗 ${HEROES[entity.hero].name}`,
   });
 }
 
@@ -198,7 +198,7 @@ function killMinion(
   ) {
     // 補到刀的金幣比在旁邊分的多。
     world.gold += source?.isPlayer ? 23 : 15;
-    player.xp = ((player.xp as number) || 0) + 25;
+    player.xp = ((player.xp) || 0) + 25;
   }
   for (const hero of world.entities)
     if (
@@ -208,7 +208,7 @@ function killMinion(
       !hero.isPlayer &&
       dist(hero, entity) < SHARE_RANGE
     )
-      hero.xp = ((hero.xp as number) || 0) + 25;
+      hero.xp = ((hero.xp) || 0) + 25;
 }
 
 function killTower(
@@ -277,16 +277,16 @@ export function shoot(
   options: ShotOptions = {},
 ): void {
   const length = Math.hypot(direction.x, direction.z) || 1;
-  const mods = source.mods as Record<string, unknown>;
+  const mods = source.mods;
   world.projectiles.push({
     x: source.x,
     z: source.z,
     dx: direction.x / length,
     dz: direction.z / length,
     speed: options.speed || 28,
-    left: options.range || (source.range as number),
+    left: options.range || (source.range),
     source,
-    damage: options.damage || (source.damage as number),
+    damage: options.damage || (source.damage),
     pierce: options.pierce || false,
     hit: new Set<number>(),
     big: !!options.big,

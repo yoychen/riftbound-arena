@@ -87,12 +87,17 @@ export function createUnit(
     progress: team === 0 ? 0 : 1,
     level: 1,
     xp: 0,
-    mods: {},
     shield: 0,
     guard: 0,
     slow: 0,
     stun: 0,
     boost: 0,
+    invuln: 0,
+    hit: 0,
+    swing: 0,
+    mark: 0,
+    moving: false,
+    mods: {},
   };
   world.entities.push(entity);
   return entity;

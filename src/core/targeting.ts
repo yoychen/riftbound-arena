@@ -83,7 +83,7 @@ function towerPriority(target: Entity, aggro: unknown): number {
 export function targetFor(
   world: World,
   entity: Entity,
-  range: number = entity.range as number,
+  range: number = entity.range,
 ): Entity | undefined {
   let best: Entity | undefined;
   let bestRank = Infinity;

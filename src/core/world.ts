@@ -13,22 +13,111 @@ import { createEventQueue, type EventQueue } from "./events.js";
 import type { Point } from "./vec.js";
 
 /**
- * 場上的單位。
+ * 進化與裝備點亮的旗標。
  *
- * 型別刻意保持寬鬆：game.js 尚未轉成 TypeScript，過早收緊只會製造摩擦。
- * 階段 8 逐檔轉換時再補完。
+ * 戰鬥邏輯查這些旗標決定要不要套用額外效果。全部是選擇性的 ——
+ * 沒點到的進化就是 undefined。
  */
+export interface Mods {
+  /** 造成傷害的 12% 轉為自身生命。 */
+  leech?: boolean;
+  /** 技能冷卻縮短 22%。 */
+  haste?: boolean;
+  /** 攻擊附帶緩速。 */
+  frost?: boolean;
+  /** 突進在原地留下燃燒區域。 */
+  trail?: boolean;
+  /** 對殘血目標追加傷害。 */
+  execute?: boolean;
+  /** 傷害加成，可累加（進化 +0.2、裝備 +0.12）。 */
+  power?: number;
+  /** 投射物命中後彈向下一個敵人。 */
+  bounce?: boolean;
+  /** 近戰普攻額外射出劍氣。 */
+  blade?: boolean;
+  /** 遠程普攻變成三連發。 */
+  split?: boolean;
+  /** 技能追加側翼彈道，或讓法球變穿透。 */
+  fan?: boolean;
+  /** 翻滾後加快攻速並補射。 */
+  roll?: boolean;
+  /** 技能打中緩速目標時傷害提升。 */
+  combo?: boolean;
+  /** 攻擊累積印記，四層引爆。 */
+  mark?: boolean;
+  /** 格擋期間反傷。 */
+  reflect?: boolean;
+  /** 護盾技的護盾量提升。 */
+  fortress?: boolean;
+  /** 護盾破裂時炸傷周圍。 */
+  thorns?: boolean;
+  /** 大招範圍大幅擴張。 */
+  mega?: boolean;
+}
+
+/** 場上的單位。 */
 export interface Entity extends Point {
   id: number;
   type: "hero" | "minion" | "tower" | "core" | "boss";
   /** 0 藍方、1 紅方、-1 中立。 */
   team: number;
+  /** 索引到 HEROES。非英雄一律是 0，不具意義。 */
+  hero: number;
+  /** 所屬兵線，0 或 1。 */
+  lane: number;
+
   hp: number;
   maxHp: number;
-  /** 面向角度（弧度）。模型旋轉由 syncModels 推導。 */
+  damage: number;
+  range: number;
+  speed: number;
+
+  /** 距離下次可以普攻還有幾秒。 */
+  attack: number;
+  /** Q / E / R / 閃避的剩餘冷卻。 */
+  cd: number[];
+  /** 面向角度（弧度）。模型旋轉由呈現層的 syncModels 推導。 */
   facing: number;
+  /** 陣亡後距離復活還有幾秒。 */
+  dead: number;
+  /** 沿兵線的進度，0 是藍方基地、1 是紅方基地。 */
+  progress: number;
+  level: number;
+  xp: number;
+
+  shield: number;
+  /** 格擋剩餘秒數，期間傷害降到 18%。 */
+  guard: number;
+  slow: number;
+  stun: number;
+  /** 攻速提升的剩餘秒數。 */
+  boost: number;
+  mods: Mods;
+
+  /** 無敵剩餘秒數。閃避與復活保護期間大於 0。 */
+  invuln: number;
+  /** 受擊閃白的剩餘秒數。 */
+  hit: number;
+  /** 揮擊動作的剩餘秒數。 */
+  swing: number;
+  /** 累積的印記層數，四層引爆。 */
+  mark: number;
+  /** 這一幀有沒有在移動，決定走路的上下擺動。 */
+  moving: boolean;
+
+  /** 只有玩家操控的英雄有這個。 */
   isPlayer?: boolean;
-  [key: string]: unknown;
+  /** 防禦塔記下的仇恨目標 id。尚未被激怒時不存在。 */
+  aggro?: number;
+  /** 上一幀是否還有護盾，thorns 用來偵測護盾破裂的瞬間。 */
+  hadShield?: boolean;
+
+  /**
+   * 呈現層掛上的 THREE.Object3D。
+   *
+   * 刻意留成 unknown：核心層不該認識 THREE，更不該讀它。
+   */
+  model?: unknown;
 }
 
 export interface Projectile extends Point {

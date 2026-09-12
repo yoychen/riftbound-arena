@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HEROES } from "../src/data/heroes.js";
 import { commonUpgrades, heroUpgrades } from "../src/data/evolutions.js";
+import { makeWorld, spawn } from "./fixtures.js";
 
 describe("遊戲資料", () => {
   it("有四位英雄，每位三個技能與三段冷卻", () => {
@@ -24,7 +25,7 @@ describe("遊戲資料", () => {
   });
 
   it("進化的 apply() 只改動傳入的實體", () => {
-    const entity = { mods: {}, maxHp: 1000, hp: 500 };
+    const entity = spawn(makeWorld(), "hero", 0, { maxHp: 1000, hp: 500 });
     const vital = commonUpgrades.find((u) => u.id === "vital");
     expect(vital).toBeDefined();
     vital!.apply(entity);

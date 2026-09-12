@@ -122,7 +122,7 @@ export function dash(
     life: 0.3,
   });
 
-  const mods = entity.mods as Record<string, unknown>;
+  const mods = entity.mods;
   if (mods.trail) addZone(world, fromX, fromZ, 3.2, 3, entity, 28, 0xf6a266, 0.2);
   if (mods.roll) entity.boost = 3;
 }

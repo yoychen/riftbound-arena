@@ -14,7 +14,7 @@ import { addZone, damage, shoot } from "./combat.js";
 import { dash, move } from "./movement.js";
 import { enemies, targetFor } from "./targeting.js";
 import { dist, normalize, type Point } from "./vec.js";
-import type { Entity, World } from "./world.js";
+import type { Entity, Mods, World } from "./world.js";
 
 /** 自動選敵與技能瞄準的最大距離。 */
 const AIM_RANGE = 18;
@@ -49,13 +49,13 @@ export function aimDirection(world: World, entity: Entity): Point {
 function attackInterval(entity: Entity): number {
   if (entity.type === "hero")
     return (
-      HEROES[entity.hero as number].rate / ((entity.boost as number) > 0 ? 1.65 : 1)
+      HEROES[entity.hero].rate / (entity.boost > 0 ? 1.65 : 1)
     );
   return entity.type === "minion" ? 1.1 : 1.25;
 }
 
 export function attack(world: World, entity: Entity): void {
-  if ((entity.attack as number) > 0 || entity.hp <= 0 || (entity.stun as number) > 0)
+  if ((entity.attack) > 0 || entity.hp <= 0 || (entity.stun) > 0)
     return;
 
   const d = normalize(aimDirection(world, entity));
@@ -63,8 +63,8 @@ export function attack(world: World, entity: Entity): void {
   entity.swing = 0.18;
   entity.attack = attackInterval(entity);
 
-  const mods = entity.mods as Record<string, unknown>;
-  const range = entity.range as number;
+  const mods = entity.mods;
+  const range = entity.range;
 
   if (range < 6) {
     world.events.emit({
@@ -80,11 +80,11 @@ export function attack(world: World, entity: Entity): void {
       const facingness =
         ((target.x - entity.x) * d.x + (target.z - entity.z) * d.z) /
         (dist(entity, target) || 1);
-      if (facingness > -0.1) damage(world, target, entity.damage as number, entity);
+      if (facingness > -0.1) damage(world, target, entity.damage, entity);
     }
     if (mods.blade)
       shoot(world, entity, d, {
-        damage: (entity.damage as number) * 0.55,
+        damage: (entity.damage) * 0.55,
         range: 10,
         pierce: true,
         color: 0x92ead2,
@@ -94,7 +94,7 @@ export function attack(world: World, entity: Entity): void {
     if (mods.split)
       for (const angle of [-0.17, 0.17])
         shoot(world, entity, rotate(d, angle), {
-          damage: (entity.damage as number) * 0.6,
+          damage: (entity.damage) * 0.6,
         });
   }
 
@@ -126,7 +126,7 @@ interface CastContext {
   target: Point;
   /** 施放者的英雄資料。 */
   hero: (typeof HEROES)[number];
-  mods: Record<string, unknown>;
+  mods: Mods;
 }
 
 type Skill = (ctx: CastContext) => void;
@@ -153,7 +153,7 @@ const windSlash: Skill = ({ world, field, caster, d, hero }) => {
 /** 鏡心格擋：短暫大幅減傷並獲得護盾。 */
 const mirrorGuard: Skill = ({ world, caster }) => {
   caster.guard = 1.8;
-  caster.shield = (caster.shield as number) + 90;
+  caster.shield = (caster.shield) + 90;
   world.events.emit({ type: "ring", x: caster.x, z: caster.z, r: 2.3, color: 0xd8efc7, life: 1.8 });
 };
 
@@ -228,14 +228,14 @@ const landslide: Skill = ({ world, field, caster, d, hero }) => {
 
 /** 震地護盾：厚護盾加上一圈短暫的緩速。 */
 const quakeShield: Skill = ({ world, caster, hero, mods }) => {
-  caster.shield = (caster.shield as number) + 300 + (mods.fortress ? 200 : 0);
+  caster.shield = (caster.shield) + 300 + (mods.fortress ? 200 : 0);
   addZone(world, caster.x, caster.z, 4.8, 0.4, caster, 100, hero.color, 0.1, 2);
 };
 
 /** 大地崩裂：範圍暈眩與重擊，同時給自己護盾。 */
 const earthshatter: Skill = ({ world, caster, mods }) => {
   addZone(world, caster.x, caster.z, mods.mega ? 10 : 7, 0.8, caster, 340, 0xf9bd84, 0.45, 0, 2);
-  caster.shield = (caster.shield as number) + 250;
+  caster.shield = (caster.shield) + 250;
 };
 
 /** 四位英雄的 Q / E / R。索引對應 HEROES 與技能槽。 */
@@ -257,10 +257,10 @@ export function cast(
   caster: Entity,
   slot: number,
 ): void {
-  const cd = caster.cd as number[];
-  if (caster.hp <= 0 || cd[slot] > 0 || (caster.stun as number) > 0) return;
+  const cd = caster.cd;
+  if (caster.hp <= 0 || cd[slot] > 0 || (caster.stun) > 0) return;
 
-  const hero = HEROES[caster.hero as number];
+  const hero = HEROES[caster.hero];
   const d = normalize(aimDirection(world, caster));
 
   const requested =
@@ -283,7 +283,7 @@ export function cast(
     return;
   }
 
-  const mods = caster.mods as Record<string, unknown>;
+  const mods = caster.mods;
   cd[slot] = hero.cd[slot] * (mods.haste ? 0.78 : 1);
   if (caster.isPlayer)
     world.events.emit({
@@ -294,7 +294,7 @@ export function cast(
       wave: "triangle",
     });
 
-  HERO_SKILLS[caster.hero as number][slot]({
+  HERO_SKILLS[caster.hero][slot]({
     world,
     field,
     caster,
