@@ -224,10 +224,7 @@ describe("進化與裝備的加成", () => {
     expect(attacker.hp).toBe(1);
   });
 
-  // 既知缺陷，見 docs/refactor-plan.md #2。invuln 的檢查排在 reflect 之後，
-  // 所以對閃避中的目標攻擊，傷害被取消了，反傷卻已經生效。
-  // 這裡記錄現況；階段 7 修正後，攻擊者的血量應該維持不變。
-  it("目前：對無敵且格擋中的目標攻擊，仍會吃到反傷", () => {
+  it("對無敵且格擋中的目標攻擊，不會觸發反傷", () => {
     const world = makeWorld();
     const attacker = spawn(world, "hero", 0, { hp: 500, maxHp: 1000 });
     const target = spawn(world, "hero", 1, {
@@ -240,8 +237,9 @@ describe("進化與裝備的加成", () => {
 
     damage(world, target, 100, attacker);
     expect(target.hp).toBe(900);
-    expect(attacker.hp).toBe(455);
-    expect(typesOf(drained(world))).toContain("ring");
+    expect(attacker.hp).toBe(500);
+    // 這一擊完全不存在，連特效都不該產生。
+    expect(drained(world)).toEqual([]);
   });
 });
 
@@ -285,5 +283,54 @@ describe("傷害數字", () => {
 
     damage(world, player, 50, ally);
     expect(typesOf(drained(world))).toContain("damage");
+  });
+});
+
+describe("無敵的涵蓋範圍", () => {
+  it("無敵期間不會被上緩速，也不會累積 mark", () => {
+    const world = makeWorld();
+    const source = spawn(world, "hero", 0, {
+      mods: { frost: true, mark: true },
+    });
+    const target = spawn(world, "hero", 1, {
+      hp: 900,
+      maxHp: 900,
+      invuln: 0.2,
+    });
+
+    damage(world, target, 100, source);
+    expect(target.slow).toBe(0);
+    expect(target.mark).toBeUndefined();
+  });
+
+  it("無敵期間不會讓攻擊者吸血", () => {
+    const world = makeWorld();
+    const source = spawn(world, "hero", 0, {
+      hp: 500,
+      maxHp: 1000,
+      mods: { leech: true },
+    });
+    const target = spawn(world, "hero", 1, {
+      hp: 900,
+      maxHp: 900,
+      invuln: 0.2,
+    });
+
+    damage(world, target, 100, source);
+    expect(source.hp).toBe(500);
+  });
+
+  it("無敵期間不會引來防禦塔的仇恨", () => {
+    const world = makeWorld();
+    const attacker = spawn(world, "hero", 0);
+    const victim = spawn(world, "hero", 1, {
+      hp: 900,
+      maxHp: 900,
+      invuln: 0.2,
+    });
+    const tower = spawn(world, "tower", 1, { x: 5, range: 11 });
+
+    damage(world, victim, 50, attacker);
+    expect(tower.aggro).toBeUndefined();
   });
 });
