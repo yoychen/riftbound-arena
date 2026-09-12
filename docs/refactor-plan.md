@@ -90,7 +90,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 3 | World 容器，module-level let 全部收編；傷害數字改走事件 | world 3 項 | ✅ |
 | 4 | entities / targeting / combat | combat 25、kill 15、targeting 9、entities 7 | ✅ |
 | 5 | skills 技能表資料化 + ai + movement | skills 28、ai 27、movement 12 | ✅ |
-| 6 | render / ui / input 拆檔 | 手動驗證為主 | |
+| 6 | render / ui / input 拆檔 | 瀏覽器輸入層檢查 9 項 | ✅ |
 | 7 | 修既知問題（見下） | 迴歸測試護網已就位 + 差異比對 | |
 | 8 | 逐檔 .js → .ts，由 core/ 開始 | tsc --noEmit 進 CI | |
 
@@ -219,6 +219,36 @@ interface Battlefield {
 `shoot()` 與 `addZone()` 原本直接建立 THREE 網格。現在它們只把外觀參數
 （`big`、`color`、`r`）寫進資料，`syncModels` 看到沒有模型的物件才補上，
 與實體的處理方式一致。
+
+## 階段 6：呈現層的拆分
+
+`game.js` 從 1676 行拆成十一個模組，改名為 `main.js` 並成為唯一的組裝點：
+
+```
+render/  renderer  terrain  models  effects  labels  minimap
+ui/      session  screens  hud  feed  audio
+input/   index
+main.js  組裝 + 賽局迴圈
+```
+
+三個設計決定：
+
+**`session` 是一個可變物件而非模組層的 `let`。** `state` 決定要不要推進模擬，
+各層都要讀它；用物件就不需要一堆 getter / setter，也不會有 live binding 的
+誤解。它留在 UI 層而不是 world 裡 —— 它是應用程式的狀態，不是戰局的狀態。
+
+**`screens` 與 `input` 用工廠函式。** 畫面需要 `setupBattle`，而戰局組裝又需要
+畫面；輸入要呼叫暫停與商店，那些又需要戰局。直接互相 import 會造成循環，
+改由 `main.js` 注入回呼。
+
+**輸入狀態放在可變的 `input` 物件裡。** 按著哪些鍵、滑鼠有沒有按住、搖桿推到
+哪，都是模擬的輸入，但生命週期屬於輸入層，所以不塞進 world。
+
+### 尚未搬走的部分
+
+`update()` 仍在 `main.js`，它是賽局規則（波次、巨獸甦醒、收服、進化時點、
+核心衰減、投射物與區域結算）。抽成 `core/match.ts` 是合理的後續，但不屬於
+本階段的範圍。
 
 ## 分層守門
 
