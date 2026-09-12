@@ -4,6 +4,8 @@ import { createUnit, type UnitType } from "../src/core/entities.js";
 import type { Entity, World } from "../src/core/world.js";
 import { createWorld } from "../src/core/world.js";
 import type { GameEvent } from "../src/core/events.js";
+import type { Battlefield } from "../src/core/battlefield.js";
+import { createNavigation, type Obstacle } from "../src/core/navigation.js";
 
 export function makeWorld(overrides: Partial<World> = {}): World {
   return Object.assign(createWorld(), overrides);
@@ -37,3 +39,21 @@ export function drained(world: World): GameEvent[] {
 }
 
 export const typesOf = (events: GameEvent[]) => events.map((e) => e.type);
+
+/**
+ * 測試用的空曠戰場：兩條沿 x 軸的直線兵線，基地在兩端。
+ * 需要障礙物的測試自行傳入。
+ */
+export function makeField(obstacles: Obstacle[] = []): Battlefield {
+  return {
+    obstacles,
+    navigation: createNavigation(obstacles),
+    bases: [
+      { x: -34, z: 25 },
+      { x: 34, z: -25 },
+    ],
+    bounds: { x: 44, z: 36 },
+    pointOnLane: (lane, t) => ({ x: -34 + t * 68, z: lane === 0 ? -20 : 20 }),
+    progressOn: (_lane, point) => Math.min(1, Math.max(0, (point.x + 34) / 68)),
+  };
+}

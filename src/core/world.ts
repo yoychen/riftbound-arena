@@ -90,6 +90,17 @@ export interface World {
 
   /** 玩家點地移動待走的轉折點。 */
   movePath: Point[];
+
+  /**
+   * 玩家的瞄準位置，由輸入層每幀更新。
+   * 技能落點與面向都以它為準。
+   */
+  aim: Point;
+  /**
+   * 是否自動瞄準最近的敵人。觸控裝置或滑鼠還沒動過時為真 ——
+   * 此時沒有有意義的游標位置可用。
+   */
+  autoAim: boolean;
 }
 
 export function createWorld(): World {
@@ -119,5 +130,7 @@ export function createWorld(): World {
     shopBuys: 0,
 
     movePath: [],
+    aim: { x: 0, z: 0 },
+    autoAim: false,
   };
 }

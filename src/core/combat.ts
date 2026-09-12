@@ -6,8 +6,9 @@
  * 因此每一條規則都可以在 Node 裡直接斷言。
  */
 
+import { TEAM_COLORS } from "../config/colors.js";
 import { HEROES } from "../data/heroes.js";
-import { dist } from "./vec.js";
+import { clamp, dist, type Point } from "./vec.js";
 import type { Entity, World } from "./world.js";
 
 /** 小兵擊殺的金幣與經驗分享半徑。 */
@@ -244,4 +245,101 @@ function killBoss(
     world.bossAt = world.time + 140;
     world.events.emit({ type: "announce", text: "攻城巨獸已倒下，下次爭奪即將到來。" });
   }
+}
+
+/** 發射投射物的可調參數。未指定的欄位取施放者的數值。 */
+export interface ShotOptions {
+  damage?: number;
+  range?: number;
+  speed?: number;
+  /** 較大的彈體與碰撞半徑。 */
+  big?: boolean;
+  /** 穿透：命中後繼續飛行。 */
+  pierce?: boolean;
+  /** 命中後彈向附近的下一個敵人。預設取施放者的 bounce 進化。 */
+  bounce?: boolean;
+  /** 命中後施加的緩速秒數。 */
+  slow?: number;
+  /** 是否計為技能傷害（影響建築減免與 combo）。 */
+  skill?: boolean;
+  color?: number;
+}
+
+/**
+ * 發射一枚投射物。
+ *
+ * 回傳的投射物不含模型 —— 呈現層會在同步時替沒有模型的投射物補上，
+ * 就像實體那樣。
+ */
+export function shoot(
+  world: World,
+  source: Entity,
+  direction: Point,
+  options: ShotOptions = {},
+): void {
+  const length = Math.hypot(direction.x, direction.z) || 1;
+  const mods = source.mods as Record<string, unknown>;
+  world.projectiles.push({
+    x: source.x,
+    z: source.z,
+    dx: direction.x / length,
+    dz: direction.z / length,
+    speed: options.speed || 28,
+    left: options.range || (source.range as number),
+    source,
+    damage: options.damage || (source.damage as number),
+    pierce: options.pierce || false,
+    hit: new Set<number>(),
+    big: !!options.big,
+    radius: options.big ? 0.95 : 0.65,
+    color: options.color ?? TEAM_COLORS[source.team] ?? 0xefb078,
+    slow: options.slow,
+    skill: options.skill,
+    bounce: options.bounce ?? !!mods.bounce,
+  });
+}
+
+/**
+ * 放置一塊持續傷害的地面區域。
+ *
+ * `delay` 是第一次結算前的預告時間，讓對手有機會走開 ——
+ * 這也是為什麼放置時會先畫一圈提示光環。
+ */
+export function addZone(
+  world: World,
+  x: number,
+  z: number,
+  r: number,
+  life: number,
+  source: Entity,
+  dmg: number,
+  color: number,
+  delay = 0.7,
+  slow = 0,
+  stun = 0,
+): void {
+  const px = clamp(x, -44, 44);
+  const pz = clamp(z, -36, 36);
+  world.zones.push({
+    x: px,
+    z: pz,
+    r,
+    life,
+    max: life,
+    source,
+    dmg,
+    delay,
+    tick: delay,
+    color,
+    slow,
+    stun,
+  });
+  world.events.emit({
+    type: "ring",
+    x: px,
+    z: pz,
+    r,
+    color,
+    life: delay + 0.2,
+  });
 }

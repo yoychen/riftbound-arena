@@ -89,7 +89,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 2 | **解耦手術**：facing 欄位 + 事件佇列 + syncModels | 事件佇列 4 項、架構邊界守門 9 項 | ✅ |
 | 3 | World 容器，module-level let 全部收編；傷害數字改走事件 | world 3 項 | ✅ |
 | 4 | entities / targeting / combat | combat 25、kill 15、targeting 9、entities 7 | ✅ |
-| 5 | skills 技能表資料化 + ai | skills：各技能的傷害／位移／CD | |
+| 5 | skills 技能表資料化 + ai + movement | skills 28、ai 27、movement 12 | ✅ |
 | 6 | render / ui / input 拆檔 | 手動驗證為主 | |
 | 7 | 修既知問題（見下） | 迴歸測試護網已就位 + 差異比對 | |
 | 8 | 逐檔 .js → .ts，由 core/ 開始 | tsc --noEmit 進 CI | |
@@ -178,6 +178,47 @@ THREE，但屬於呈現層，因此改成 `damage` 事件，由呈現層自行�
 `targetFor` 從「排序後取第一個」改成單趟最小值掃描，省下每次呼叫的陣列配置
 與排序。這是演算法變更，因此以差異比對驗證：1200 組隨機戰局，新舊實作選出
 的目標不一致 0 組。
+
+## 階段 5：Battlefield 注入
+
+`ai` 與 `move` 需要兵線與障礙物，但兩者都是建構場景時的產物。與其把地形
+搬進核心層，改成定義 `Battlefield` 介面由呈現層實作並注入：
+
+```ts
+interface Battlefield {
+  obstacles: readonly Obstacle[];
+  navigation: Navigation;
+  bases: readonly Point[];
+  bounds: { x: number; z: number };
+  pointOnLane(lane: number, t: number): Point;
+  progressOn(lane: number, point: Point): number;
+}
+```
+
+`pointOnLane` 刻意不在核心層用取樣點自行內插 —— 那會和原本的
+`CatmullRomCurve3.getPoint()` 產生微小差異，兵線走法就不再等價。實作留在
+呈現層直接問曲線。
+
+### 技能改成一張表
+
+十二個技能原本寫在 `cast()` 裡四段 `if (e.hero === n)` 的巢狀分支中。現在每個
+技能是具名函式，掛在 `HERO_SKILLS[英雄][技能槽]` 上，要查「烈焰印記做什麼」
+不必再數分支。
+
+### 瞄準狀態進入 World
+
+`direction()` 與 `cast()` 原本直接讀 `aim`、`coarse`、`pointerKnown` 這些輸入層
+變數。改成 `world.aim` 與 `world.autoAim`，由輸入層每幀更新 —— 它們是模擬的
+輸入，和 `movePath` 同一類。
+
+`cast()` 原本還檢查 `state !== "playing"`，這是 UI 狀態機。守衛移到呈現層的
+`playerCast()`，因為技能按鈕在暫停畫面仍然點得到。
+
+### 投射物與區域不再持有模型
+
+`shoot()` 與 `addZone()` 原本直接建立 THREE 網格。現在它們只把外觀參數
+（`big`、`color`、`r`）寫進資料，`syncModels` 看到沒有模型的物件才補上，
+與實體的處理方式一致。
 
 ## 分層守門
 
