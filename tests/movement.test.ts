@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dash, move } from "../src/core/movement.js";
+import { createRng } from "../src/core/rng.js";
 import { drained, makeField, makeWorld, spawn, typesOf } from "./fixtures.js";
 
 describe("移動", () => {
@@ -108,5 +109,54 @@ describe("突進", () => {
     const world = makeWorld();
     dash(world, field, spawn(world, "hero", 0), { x: 1, z: 0 });
     expect(typesOf(drained(world))).toContain("ring");
+  });
+});
+
+describe("從障礙物中脫困", () => {
+  /** 密集且互相重疊的樹叢，重現原本會卡住的地形。 */
+  const cluster = (rng: () => number, count: number) =>
+    Array.from({ length: count }, () => ({
+      x: rng() * 4 - 2,
+      z: rng() * 4 - 2,
+      r: 0.65,
+    }));
+
+  it("走進密集樹叢後不會卡在樹裡", () => {
+    // 地形生成沒有檢查樹與樹的間距，所以樹會互相重疊。原本的單輪推擠
+    // 在這種夾角處有一成四的機率把角色留在障礙物內部。
+    const rng = createRng(31337);
+    let stuck = 0;
+    const trials = 1500;
+
+    for (let t = 0; t < trials; t++) {
+      const obstacles = cluster(rng, 2 + Math.floor(rng() * 4));
+      const field = makeField(obstacles);
+      const world = makeWorld();
+      const angle = rng() * Math.PI * 2;
+      const unit = spawn(world, "hero", 0, {
+        x: Math.cos(angle) * 5,
+        z: Math.sin(angle) * 5,
+      });
+
+      move(field, unit, -Math.cos(angle) * 9, -Math.sin(angle) * 9, 0.6);
+      if (
+        obstacles.some(
+          (o) => Math.hypot(unit.x - o.x, unit.z - o.z) < o.r + 0.48 - 1e-9,
+        )
+      )
+        stuck++;
+    }
+    expect(stuck).toBe(0);
+  });
+
+  it("脫困不會把角色丟出地圖外", () => {
+    const obstacles = [{ x: 43.8, z: 35.8, r: 2 }];
+    const field = makeField(obstacles);
+    const world = makeWorld();
+    const unit = spawn(world, "hero", 0, { x: 43, z: 35 });
+
+    move(field, unit, 10, 10, 0.5);
+    expect(Math.abs(unit.x)).toBeLessThanOrEqual(44);
+    expect(Math.abs(unit.z)).toBeLessThanOrEqual(36);
   });
 });
