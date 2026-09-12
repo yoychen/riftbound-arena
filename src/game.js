@@ -1,8 +1,41 @@
 import * as THREE from "three";
+import {
+  $,
+  box,
+  camera,
+  cyl,
+  labelCtx as ctx,
+  mapCtx as mapctx,
+  mesh,
+  renderer,
+  scene,
+  screen,
+  sphere,
+  W,
+  H,
+} from "./render/renderer.js";
+import {
+  bases,
+  curves,
+  lanePoints,
+  obstacles,
+  river,
+  teamColors,
+} from "./render/terrain.js";
+import { unitModel, worldEntities, zoneMesh } from "./render/models.js";
+import { clearEffects, playBurst, playRing, stepEffects } from "./render/effects.js";
+import {
+  clearFloaters,
+  drawLabels,
+  showDamageNumber,
+  stepFloaters,
+} from "./render/labels.js";
+import { drawMap } from "./render/minimap.js";
+import { clearFeed, showAnnounce, showFeed, tickToast } from "./ui/feed.js";
+import { playTone, resumeAudio, toggleMute } from "./ui/audio.js";
 import { HEROES } from "./data/heroes.js";
 import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
 import { clamp, clock, dist, rand } from "./core/vec.js";
-import { createRng, TERRAIN_SEED } from "./core/rng.js";
 import { createNavigation } from "./core/navigation.js";
 import { createWorld } from "./core/world.js";
 import { createUnit } from "./core/entities.js";
@@ -12,267 +45,13 @@ import { dash, move } from "./core/movement.js";
 import { aimDirection, attack, cast } from "./core/skills.js";
 import { ai } from "./core/ai.js";
 import { TEAM_COLORS } from "./config/colors.js";
-const $ = (id) => document.getElementById(id);
 
-let renderer;
-try {
-  renderer = new THREE.WebGLRenderer({
-    canvas: $("world"),
-    antialias: true,
-    powerPreference: "high-performance",
-  });
-} catch (e) {
-  $("overlay").innerHTML =
-    '<div class="modal"><h2>無法啟動 3D 畫面</h2><p>請使用支援 WebGL 的瀏覽器，並開啟硬體加速後重新整理。</p></div>';
-  throw e;
-}
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.setClearColor(0x294340);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.18;
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x456259, 0.006);
-const camera = new THREE.PerspectiveCamera(
-  43,
-  innerWidth / innerHeight,
-  0.1,
-  230,
-);
-camera.position.set(2, 48, 44);
-camera.lookAt(0, 0, 0);
-scene.add(new THREE.HemisphereLight(0xdff9f5, 0x49653b, 2.25));
-const sun = new THREE.DirectionalLight(0xffe6ae, 3.1);
-sun.position.set(-28, 65, 20);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, {
-  left: -60,
-  right: 60,
-  top: 60,
-  bottom: -60,
-  near: 1,
-  far: 150,
-});
-sun.shadow.bias = -0.001;
-scene.add(sun);
-const materials = new Map();
-function mat(c, em = 0) {
-  const k = c + ":" + em;
-  if (!materials.has(k))
-    materials.set(
-      k,
-      new THREE.MeshStandardMaterial({
-        color: c,
-        roughness: 0.88,
-        flatShading: true,
-        emissive: c,
-        emissiveIntensity: em,
-      }),
-    );
-  return materials.get(k);
-}
-function mesh(geo, c, x = 0, y = 0, z = 0, parent = scene, em = 0) {
-  const m = new THREE.Mesh(geo, mat(c, em));
-  m.position.set(x, y, z);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  parent.add(m);
-  return m;
-}
-const box = (w, h, d, c, x, y, z, p) =>
-    mesh(new THREE.BoxGeometry(w, h, d), c, x, y, z, p),
-  sphere = (r, c, x, y, z, p, detail = 0) =>
-    mesh(new THREE.IcosahedronGeometry(r, detail), c, x, y, z, p),
-  cyl = (rt, rb, h, c, x, y, z, p, n = 8) =>
-    mesh(new THREE.CylinderGeometry(rt, rb, h, n), c, x, y, z, p);
-const mapRoot = new THREE.Group();
-scene.add(mapRoot);
-box(94, 2, 80, 0x46674b, 0, -1.2, 0, mapRoot);
-box(98, 4, 84, 0x344e40, 0, -4, 0, mapRoot);
-box(102, 4, 88, 0x263f36, 0, -8, 0, mapRoot);
-const lanes = [
-  [
-    new THREE.Vector3(-34, 0, 25),
-    new THREE.Vector3(-28, 0, 13),
-    new THREE.Vector3(-27, 0, -9),
-    new THREE.Vector3(-17, 0, -23),
-    new THREE.Vector3(10, 0, -24),
-    new THREE.Vector3(34, 0, -25),
-  ],
-  [
-    new THREE.Vector3(-34, 0, 25),
-    new THREE.Vector3(-12, 0, 25),
-    new THREE.Vector3(14, 0, 23),
-    new THREE.Vector3(27, 0, 8),
-    new THREE.Vector3(28, 0, -12),
-    new THREE.Vector3(34, 0, -25),
-  ],
-];
-const curves = lanes.map((p) => new THREE.CatmullRomCurve3(p));
-const lanePoints = curves.map((c) => c.getPoints(160));
-function strip(points, width, color, y) {
-  const verts = [],
-    idx = [];
-  points.forEach((p, i) => {
-    const next = points[Math.min(points.length - 1, i + 1)],
-      prev = points[Math.max(0, i - 1)];
-    let dx = next.x - prev.x,
-      dz = next.z - prev.z,
-      l = Math.hypot(dx, dz) || 1;
-    verts.push(
-      p.x - ((dz / l) * width) / 2,
-      y,
-      p.z + ((dx / l) * width) / 2,
-      p.x + ((dz / l) * width) / 2,
-      y,
-      p.z - ((dx / l) * width) / 2,
-    );
-    if (i < points.length - 1) {
-      let n = i * 2;
-      idx.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
-    }
-  });
-  let g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-  g.setIndex(idx);
-  g.computeVertexNormals();
-  let m = mesh(g, color, 0, 0, 0, mapRoot);
-  m.castShadow = false;
-  return m;
-}
-lanePoints.forEach((p) => {
-  strip(p, 8, 0x73835a, 0.005);
-  strip(p, 6.5, 0xb9b98a, 0.035);
-});
-const river = [];
-for (let i = 0; i <= 100; i++) {
-  let x = -46 + i * 0.92;
-  river.push(new THREE.Vector3(x, 0, -x * 0.47 + Math.sin(x * 0.12) * 2));
-}
-strip(river, 6, 0x46786e, 0.06);
-strip(river, 4.5, 0x3b9b94, 0.08);
-for (const p of lanePoints.flat().filter((p, i) => i % 4 === 0)) {
-  if (Math.abs(p.z - (-p.x * 0.47 + Math.sin(p.x * 0.12) * 2)) < 4) {
-    box(7.2, 0.24, 2.4, 0x969a79, p.x, 0.2, p.z, mapRoot);
-  }
-}
-cyl(8, 8, 0.25, 0x66755b, 0, 0.1, 0, mapRoot, 24);
-cyl(6.9, 6.9, 0.25, 0x4a554b, 0, 0.2, 0, mapRoot, 24);
-const pitRing = mesh(
-  new THREE.TorusGeometry(7.2, 0.13, 5, 40),
-  0xc59657,
-  0,
-  0.34,
-  0,
-  mapRoot,
-  0.1,
-);
-pitRing.rotation.x = Math.PI / 2;
-const seeded = createRng(TERRAIN_SEED);
-const obstacles = [];
-function nearLane(x, z, d = 6) {
-  return lanePoints.some((ps) =>
-    ps.some((p, i) => i % 3 === 0 && Math.hypot(x - p.x, z - p.z) < d),
-  );
-}
-for (let i = 0; i < 360; i++) {
-  let x = seeded() * 88 - 44,
-    z = seeded() * 72 - 36;
-  if (
-    nearLane(x, z) ||
-    Math.hypot(x, z) < 10 ||
-    Math.abs(z + x * 0.47 - Math.sin(x * 0.12) * 2) < 4 ||
-    Math.hypot(x + 34, z - 25) < 10 ||
-    Math.hypot(x - 34, z + 25) < 10
-  )
-    continue;
-  let s = 0.75 + seeded() * 1.05;
-  const tree = new THREE.Group();
-  tree.position.set(x, 0, z);
-  mapRoot.add(tree);
-  cyl(0.23, 0.4, 2, 0x665c42, 0, 1, 0, tree, 5);
-  sphere(
-    1.9 * s,
-    [0x315d42, 0x3e724a, 0x547f48, 0x658b48][i % 4],
-    0,
-    2.8 * s,
-    0,
-    tree,
-  );
-  sphere(1.4 * s, 0x527c46, 0.6 * s, 4 * s, 0.2, tree);
-  obstacles.push({ x, z, r: 0.65 });
-}
-for (let i = 0; i < 115; i++) {
-  let x = seeded() * 88 - 44,
-    z = seeded() * 72 - 36;
-  if (nearLane(x, z, 4) || Math.hypot(x, z) < 8) continue;
-  let s = 0.4 + seeded();
-  let rock = sphere(
-    s,
-    [0x8a9781, 0x737f72, 0xa9af91][i % 3],
-    x,
-    s * 0.6,
-    z,
-    mapRoot,
-  );
-  rock.scale.set(1.5, 0.9, 1);
-  rock.rotation.y = seeded() * 6;
-}
-for (let i = 0; i < 210; i++) {
-  let x = seeded() * 90 - 45,
-    z = seeded() * 74 - 37;
-  if (!nearLane(x, z, 3) && Math.hypot(x, z) > 8) {
-    const g = mesh(
-      new THREE.ConeGeometry(0.25, 0.7, 3),
-      0x91a85a,
-      x,
-      0.3,
-      z,
-      mapRoot,
-    );
-    g.rotation.y = seeded() * 6;
-  }
-}
-for (const p of lanePoints.flat().filter((_, i) => i % 10 === 0)) {
-  const tile = box(0.3, 0.04, 0.7, 0xd4ceaa, p.x, 0.08, p.z, mapRoot);
-  tile.rotation.y = seeded() * 6;
-}
-const bases = [
-    { x: -34, z: 25 },
-    { x: 34, z: -25 },
-  ],
-  teamColors = TEAM_COLORS;
-for (let team = 0; team < 2; team++) {
-  const b = bases[team];
-  cyl(8, 8, 0.4, 0x687e70, b.x, 0.3, b.z, mapRoot, 20);
-  cyl(6.6, 7, 0.3, 0x84978a, b.x, 0.6, b.z, mapRoot, 20);
-  const ring = mesh(
-    new THREE.TorusGeometry(6.4, 0.1, 4, 40),
-    teamColors[team],
-    b.x,
-    0.81,
-    b.z,
-    mapRoot,
-    0.5,
-  );
-  ring.rotation.x = Math.PI / 2;
-}
-const worldEntities = new THREE.Group();
-scene.add(worldEntities);
 /** 這一局的模擬狀態。特效、鏡頭、音訊與 UI 狀態機不在裡面。 */
 const world = createWorld();
-let effects = [],
-  floaters = [],
-  state = "select",
+let state = "select",
   selected = 0,
-  toastUntil = 0,
   viewTarget = new THREE.Vector3(),
-  last = performance.now(),
-  muted = false,
-  audioCtx = null;
+  last = performance.now();
 const keys = new Set(),
   mouse = new THREE.Vector2(),
   aim = new THREE.Vector3(0, 0, 0),
@@ -324,180 +103,6 @@ function handleEvent(event) {
   }
 }
 
-function playTone(freq, duration, volume, type) {
-  if (muted || !audioCtx) return;
-  const o = audioCtx.createOscillator(),
-    g = audioCtx.createGain();
-  o.type = type;
-  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
-  o.frequency.exponentialRampToValueAtTime(
-    freq * 0.5,
-    audioCtx.currentTime + duration,
-  );
-  g.gain.setValueAtTime(volume, audioCtx.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
-  o.connect(g);
-  g.connect(audioCtx.destination);
-  o.start();
-  o.stop(audioCtx.currentTime + duration);
-}
-function unitModel(type, team, hero = 0) {
-  const root = new THREE.Group();
-  const c = team < 0 ? 0xcf7446 : teamColors[team];
-  if (type === "hero") {
-    const h = HEROES[hero],
-      bulky = hero === 3;
-    const body = cyl(
-      bulky ? 0.78 : 0.48,
-      bulky ? 0.85 : 0.6,
-      1.2,
-      h.color,
-      0,
-      1.1,
-      0,
-      root,
-      6,
-    );
-    const head = sphere(0.43, 0xe4c9a0, 0, 2.02, 0, root, 1);
-    box(0.67, 0.18, 0.68, hero === 2 ? 0x7d65ab : 0x324e4c, 0, 2.25, 0, root);
-    box(0.28, 0.62, 0.34, 0x294343, -0.29, 0.35, 0, root);
-    box(0.28, 0.62, 0.34, 0x294343, 0.29, 0.35, 0, root);
-    const cape = mesh(
-      new THREE.ConeGeometry(0.7, 1.4, 4),
-      h.color,
-      0,
-      1.25,
-      -0.36,
-      root,
-    );
-    cape.rotation.x = -0.25;
-    if (hero === 0) {
-      box(0.15, 1.65, 0.16, 0xdbede3, 0.8, 1.4, 0.48, root);
-      box(0.7, 0.13, 0.2, 0xcbb477, 0.8, 0.8, 0.48, root);
-    }
-    if (hero === 1) {
-      const bow = mesh(
-        new THREE.TorusGeometry(0.7, 0.07, 4, 12, Math.PI),
-        0xe6bc66,
-        0.65,
-        1.3,
-        0.2,
-        root,
-      );
-      bow.rotation.z = -Math.PI / 2;
-      box(0.04, 1.4, 0.04, 0xf0e0b3, 0.65, 1.3, 0.2, root);
-    }
-    if (hero === 2) {
-      cyl(0.06, 0.07, 2.1, 0xc5b58d, 0.75, 1.25, 0.15, root);
-      sphere(0.32, 0xbea0fc, 0.75, 2.35, 0.15, root);
-      cyl(0, 0.64, 1.1, 0x7f68aa, 0, 2.7, 0, root, 6);
-    }
-    if (hero === 3) {
-      box(0.9, 1.1, 0.25, 0xc8ac70, -0.95, 1.1, 0.35, root);
-      box(0.7, 0.6, 0.6, 0x859890, 1.05, 1.65, 0.3, root);
-      cyl(0.09, 0.09, 1.2, 0x6e6655, 1.05, 1, 0.3, root);
-    }
-  } else if (type === "minion") {
-    cyl(0.35, 0.42, 0.7, team === 0 ? 0x428f99 : 0xa95f68, 0, 0.6, 0, root, 5);
-    sphere(0.28, 0xc5c6a3, 0, 1.16, 0, root);
-    box(0.1, 0.8, 0.12, 0xb9cfc5, 0.5, 0.7, 0.2, root);
-  } else if (type === "tower") {
-    cyl(1.5, 1.8, 0.5, 0x65796f, 0, 0.25, 0, root);
-    cyl(0.8, 1.2, 3.1, 0x879a8b, 0, 1.9, 0, root);
-    cyl(1.2, 0.8, 0.6, 0xb9c5aa, 0, 3.4, 0, root);
-    const crystal = mesh(
-      new THREE.OctahedronGeometry(0.65),
-      c,
-      0,
-      4.3,
-      0,
-      root,
-      0.8,
-    );
-    root.userData.crystal = crystal;
-  } else if (type === "core") {
-    cyl(2.2, 2.7, 1, 0x627970, 0, 0.5, 0, root);
-    for (let i = 0; i < 5; i++) {
-      let a = (i / 5) * Math.PI * 2;
-      box(
-        0.38,
-        2.5,
-        0.4,
-        0x9cab94,
-        Math.sin(a) * 1.8,
-        1.3,
-        Math.cos(a) * 1.8,
-        root,
-      );
-    }
-    const crystal = mesh(
-      new THREE.OctahedronGeometry(1.7),
-      c,
-      0,
-      3.1,
-      0,
-      root,
-      0.75,
-    );
-    crystal.scale.y = 1.4;
-    root.userData.crystal = crystal;
-  } else {
-    const shell = sphere(2.45, 0x655548, 0, 1.8, 0, root, 1);
-    shell.scale.set(1, 0.7, 1.2);
-    for (let i = 0; i < 7; i++) {
-      let a = (i / 7) * Math.PI * 2;
-      mesh(
-        new THREE.ConeGeometry(0.48, 1.2, 5),
-        0xffa455,
-        Math.sin(a) * 1.6,
-        2.8,
-        Math.cos(a) * 1.8,
-        root,
-        0.6,
-      );
-    }
-    sphere(0.85, 0x977155, 0, 1.25, 2.7, root);
-    sphere(0.14, 0xffcc74, -0.4, 1.5, 3.35, root);
-    sphere(0.14, 0xffcc74, 0.4, 1.5, 3.35, root);
-    for (let a of [-1, 1])
-      for (let b of [-1, 1])
-        cyl(0.5, 0.6, 0.8, 0x7f6b52, a * 1.7, 0.55, b * 1.7, root);
-  }
-  const ring = mesh(
-    new THREE.RingGeometry(
-      type === "hero"
-        ? 0.85
-        : type === "minion"
-          ? 0.45
-          : type === "boss"
-            ? 2.6
-            : 1.5,
-      type === "hero"
-        ? 1
-        : type === "minion"
-          ? 0.53
-          : type === "boss"
-            ? 2.8
-            : 1.65,
-      32,
-    ),
-    c,
-    0,
-    0.06,
-    0,
-    root,
-    0.3,
-  );
-  ring.rotation.x = -Math.PI / 2;
-  ring.material.side = THREE.DoubleSide;
-  return root;
-}
-/**
- * 建立單位並掛上模型。
- *
- * 數值與實體結構由核心層決定，這裡只負責補上 THREE 的部分 ——
- * 模擬層從不讀取 `model`。
- */
 function addUnit(type, team, x, z, hero = 0, lane = 0) {
   const e = createUnit(world, type, team, x, z, hero, lane);
   e.model = unitModel(type, team, hero);
@@ -506,7 +111,7 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
   return e;
 }
 function clearBattle() {
-  for (const e of [...world.entities, ...world.projectiles, ...effects])
+  for (const e of [...world.entities, ...world.projectiles])
     if (e.model) {
       scene.remove(e.model);
       worldEntities.remove(e.model);
@@ -514,9 +119,9 @@ function clearBattle() {
   for (const z of world.zones) if (z.model) scene.remove(z.model);
   world.entities = [];
   world.projectiles = [];
-  effects = [];
   world.zones = [];
-  floaters = [];
+  clearEffects();
+  clearFloaters();
 }
 function setupBattle(hero) {
   world.movePath = [];
@@ -551,71 +156,9 @@ function setupBattle(hero) {
     addUnit("hero", 1, 30 + i * 2, -22, (hero + i + 1) % 4, i % 2);
   viewTarget.set(world.player.x, 0, world.player.z);
   $("evolutions").innerHTML = "";
-  $("feed").innerHTML = "";
+  clearFeed();
   buildSkills();
   updateHud();
-}
-function playRing(x, z, r, color, life = 0.45) {
-  const m = new THREE.Mesh(
-    new THREE.RingGeometry(r * 0.88, r, 40),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.8,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.position.set(x, 0.18, z);
-  scene.add(m);
-  effects.push({ model: m, life, max: life, expand: true });
-}
-function playBurst(x, z, color, count = 10) {
-  for (let i = 0; i < count; i++) {
-    const m = sphere(0.12, color, x, 0.6, z, scene);
-    effects.push({
-      model: m,
-      life: rand(0.2, 0.55),
-      max: 0.55,
-      vx: rand(-7, 7),
-      vz: rand(-7, 7),
-      vy: rand(2, 7),
-    });
-  }
-}
-/** 區域傷害的地面圓盤。模擬只給座標、半徑與顏色。 */
-function zoneMesh(x, z, r, color) {
-  const m = new THREE.Mesh(
-    new THREE.CircleGeometry(r, 40),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.19,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.position.set(x, 0.12, z);
-  scene.add(m);
-  return m;
-}
-/** 傷害數字由呈現層自行保管生命週期，模擬只負責說「這裡跳一個數字」。 */
-function showDamageNumber(x, z, text, color) {
-  floaters.push({ x, z, y: 2.8, text, life: 0.8, color });
-}
-function showAnnounce(text) {
-  $("toast").textContent = text;
-  $("toast").classList.add("show");
-  toastUntil = performance.now() + 3400;
-}
-function showFeed(text) {
-  const d = document.createElement("div");
-  d.textContent = text;
-  $("feed").prepend(d);
-  while ($("feed").children.length > 4) $("feed").lastChild.remove();
-  setTimeout(() => d.remove(), 8000);
 }
 /**
  * 障礙物在地形建好之後就不再變動，所以導航實例在這裡一次建立，
@@ -784,11 +327,7 @@ function startGame(h) {
   setupBattle(h);
   state = "playing";
   $("overlay").classList.add("hidden");
-  if (!audioCtx)
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    } catch {}
-  audioCtx?.resume();
+  resumeAudio();
   announce("戰鬥開始！右鍵或 WASD 移動，左鍵普通攻擊。");
   return { hero: HEROES[h].name, state };
 }
@@ -1262,186 +801,6 @@ function updateHud() {
       ? `重返戰場<br><b style="font-size:48px">${Math.ceil(Math.max(0, world.player.dead))}</b>`
       : "";
 }
-const ctx = $("labels").getContext("2d"),
-  mapctx = $("minimap").getContext("2d");
-let W = innerWidth,
-  H = innerHeight;
-const proj = new THREE.Vector3();
-function resize() {
-  W = innerWidth;
-  H = innerHeight;
-  renderer.setSize(W, H);
-  camera.aspect = W / H;
-  camera.updateProjectionMatrix();
-  $("labels").width = W * devicePixelRatio;
-  $("labels").height = H * devicePixelRatio;
-  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-}
-window.addEventListener("resize", resize);
-resize();
-function screen(x, y, z) {
-  proj.set(x, y, z).project(camera);
-  return {
-    x: ((proj.x + 1) * W) / 2,
-    y: ((1 - proj.y) * H) / 2,
-    visible: proj.z < 1 && proj.z > -1,
-  };
-}
-function drawLabels() {
-  ctx.clearRect(0, 0, W, H);
-  if (state === "select") return;
-  for (const e of world.entities) {
-    if (e.hp <= 0) continue;
-    const p = screen(
-      e.x,
-      e.type === "core"
-        ? 6
-        : e.type === "tower"
-          ? 5.4
-          : e.type === "boss"
-            ? 4.2
-            : 3.1,
-      e.z,
-    );
-    if (!p.visible || p.x < -100 || p.x > W + 100 || p.y < 65 || p.y > H + 20)
-      continue;
-    let w = e.type === "minion" ? 25 : e.type === "hero" ? 55 : 76;
-    ctx.fillStyle = "#0a1e24dc";
-    ctx.fillRect(p.x - w / 2 - 1, p.y - 1, w + 2, 7);
-    ctx.fillStyle =
-      e.team < 0 ? "#edb66e" : e.team === 0 ? "#7ce1d1" : "#ee9390";
-    ctx.fillRect(p.x - w / 2, p.y, w * clamp(e.hp / e.maxHp, 0, 1), 5);
-    if (e.shield > 0) {
-      ctx.fillStyle = "#f1e4b6";
-      ctx.fillRect(
-        p.x - w / 2,
-        p.y + 6,
-        w * clamp(e.shield / e.maxHp, 0, 1),
-        2,
-      );
-    }
-    if (e.type !== "minion") {
-      ctx.font = `${e.isPlayer ? "bold " : ""}11px 'Noto Sans TC',sans-serif`;
-      ctx.textAlign = "center";
-      ctx.shadowColor = "#07201b";
-      ctx.shadowBlur = 5;
-      ctx.fillStyle = e.isPlayer ? "#fff7c7" : "#f1f4e6";
-      ctx.fillText(
-        e.type === "hero"
-          ? `${e.isPlayer ? "▼ 你" : HEROES[e.hero].name}  ${e.level}`
-          : e.type === "core"
-            ? "核心"
-            : e.type === "boss"
-              ? e.team < 0
-                ? "熔岩龜 · 中立巨獸"
-                : "攻城熔岩龜"
-              : "防禦塔",
-        p.x,
-        p.y - 6,
-      );
-      ctx.shadowBlur = 0;
-      if (e.slow > 0 || e.stun > 0) {
-        ctx.fillStyle = "#bdefff";
-        ctx.fillText(e.stun > 0 ? "暈眩" : "緩速", p.x, p.y - 23);
-      }
-    }
-  }
-  for (const f of floaters) {
-    const p = screen(f.x, f.y + (1 - f.life) * 2, f.z);
-    ctx.globalAlpha = clamp(f.life * 2, 0, 1);
-    ctx.font = "bold 17px Space Grotesk,sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillStyle = f.color;
-    ctx.strokeStyle = "#24352a";
-    ctx.lineWidth = 2;
-    ctx.strokeText(f.text, p.x, p.y);
-    ctx.fillText(f.text, p.x, p.y);
-  }
-  ctx.globalAlpha = 1;
-  if (world.ping && world.time < world.ping.until) {
-    const p = screen(world.ping.x, 0.4, world.ping.z);
-    ctx.strokeStyle = "#ffe2a2";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 13 + Math.sin(world.time * 5) * 4, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = "#ffe2a2";
-    ctx.font = "12px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("集合", p.x, p.y - 22);
-  }
-}
-function drawMap() {
-  const c = mapctx,
-    mx = (x) => ((x + 47) / 94) * 210,
-    mz = (z) => ((z + 40) / 80) * 168;
-  c.fillStyle = "#243e35";
-  c.fillRect(0, 0, 210, 168);
-  c.strokeStyle = "#477f76";
-  c.lineWidth = 10;
-  c.beginPath();
-  river.forEach((p, i) =>
-    i ? c.lineTo(mx(p.x), mz(p.z)) : c.moveTo(mx(p.x), mz(p.z)),
-  );
-  c.stroke();
-  c.lineWidth = 6;
-  c.strokeStyle = "#9da780";
-  for (const ps of lanePoints) {
-    c.beginPath();
-    ps.forEach((p, i) =>
-      i ? c.lineTo(mx(p.x), mz(p.z)) : c.moveTo(mx(p.x), mz(p.z)),
-    );
-    c.stroke();
-  }
-  c.strokeStyle = "#d2b777";
-  c.lineWidth = 1;
-  c.beginPath();
-  c.arc(mx(0), mz(0), 12, 0, Math.PI * 2);
-  c.stroke();
-  for (const e of world.entities) {
-    if (e.hp <= 0) continue;
-    c.fillStyle = e.isPlayer
-      ? "#fff2b6"
-      : e.team === 0
-        ? "#72dddc"
-        : e.team === 1
-          ? "#f98c91"
-          : "#ffc477";
-    let r =
-      e.type === "minion"
-        ? 1.5
-        : e.type === "hero"
-          ? 3.2
-          : e.type === "boss"
-            ? 5
-            : 4;
-    if (e.type === "tower" || e.type === "core") {
-      c.fillRect(mx(e.x) - r, mz(e.z) - r, r * 2, r * 2);
-    } else {
-      c.beginPath();
-      c.arc(mx(e.x), mz(e.z), r, 0, Math.PI * 2);
-      c.fill();
-    }
-    if (e.isPlayer) {
-      c.strokeStyle = "#fffbdc";
-      c.lineWidth = 1;
-      c.beginPath();
-      c.arc(mx(e.x), mz(e.z), 5.5, 0, Math.PI * 2);
-      c.stroke();
-    }
-  }
-  if (world.player && state !== "select") {
-    c.strokeStyle = "#e4ead480";
-    c.lineWidth = 1;
-    c.strokeRect(mx(world.player.x) - 29, mz(world.player.z) - 22, 58, 44);
-  }
-  if (world.ping && world.time < world.ping.until) {
-    c.strokeStyle = "#ffe2a2";
-    c.beginPath();
-    c.arc(mx(world.ping.x), mz(world.ping.z), 6 + Math.sin(world.time * 5) * 2, 0, Math.PI * 2);
-    c.stroke();
-  }
-}
 const aimRing = new THREE.Mesh(
   new THREE.RingGeometry(0.4, 0.49, 24),
   new THREE.MeshBasicMaterial({
@@ -1482,37 +841,9 @@ function frame(now) {
   aimRing.visible =
     state === "playing" && pointerKnown && !coarse && world.player?.hp > 0;
   aimRing.position.set(aim.x, 0.17, aim.z);
-  for (const e of effects) {
-    if (state === "playing" || state === "ended") {
-      e.life -= dt;
-      if (e.expand) {
-        const s = 1 + (1 - e.life / e.max) * 0.3;
-        e.model.scale.setScalar(s);
-        e.model.material.opacity = clamp((e.life / e.max) * 0.8, 0, 1);
-      } else {
-        e.model.position.x += e.vx * dt;
-        e.model.position.z += e.vz * dt;
-        e.model.position.y += e.vy * dt;
-        e.vy -= 15 * dt;
-        e.model.scale.setScalar(Math.max(0.05, e.life / e.max));
-      }
-    }
-  }
-  effects = effects.filter((e) => {
-    if (e.life <= 0) {
-      scene.remove(e.model);
-      e.model.geometry.dispose();
-      if (e.expand) e.model.material.dispose();
-      return false;
-    }
-    return true;
-  });
-  if (state === "playing") floaters.forEach((f) => (f.life -= dt));
-  floaters = floaters.filter((f) => f.life > 0);
-  if (performance.now() > toastUntil) $("toast").classList.remove("show");
   renderer.render(scene, camera);
-  drawLabels();
-  drawMap();
+  drawLabels(world, state);
+  drawMap(world, state);
 }
 function pointerAim(e) {
   mouse.set((e.clientX / W) * 2 - 1, (-e.clientY / H) * 2 + 1);
@@ -1532,7 +863,7 @@ $("world").addEventListener("pointerdown", (e) => {
     attackPointerId = e.pointerId;
     mouseDown = true;
     attack(world, world.player);
-    audioCtx?.resume();
+    resumeAudio();
   }
 });
 function releaseAttackPointer(e) {
@@ -1576,9 +907,7 @@ document.addEventListener("visibilitychange", () => {
 });
 $("pause").onclick = pauseGame;
 $("sound").onclick = () => {
-  muted = !muted;
-  $("sound").textContent = muted ? "♫ 靜音" : "♫ 音效";
-  if (!muted) audioCtx?.resume();
+  $("sound").textContent = toggleMute() ? "♫ 靜音" : "♫ 音效";
 };
 $("shopButton").onclick = showShop;
 $("minimap").onclick = (e) => {
