@@ -1,3 +1,12 @@
+/**
+ * 組裝層。
+ *
+ * 這裡把各層接在一起並跑主迴圈：核心層的模擬、render 的場景、ui 的畫面、
+ * input 的事件。每一層都不認識彼此，交會點只有這個檔案。
+ *
+ * 仍留在這裡的 `update()` 是賽局規則（波次、巨獸、進化時點、核心衰減），
+ * 之後可以再抽成 core/match.ts。
+ */
 import * as THREE from "three";
 import {
   $,
@@ -22,6 +31,10 @@ import {
   river,
   teamColors,
 } from "./render/terrain.js";
+import { session } from "./ui/session.js";
+import { bindInput, input, refreshAim } from "./input/index.js";
+import { buildSkills, updateHud } from "./ui/hud.js";
+import { createScreens } from "./ui/screens.js";
 import { unitModel, worldEntities, zoneMesh } from "./render/models.js";
 import { clearEffects, playBurst, playRing, stepEffects } from "./render/effects.js";
 import {
@@ -48,22 +61,11 @@ import { TEAM_COLORS } from "./config/colors.js";
 
 /** 這一局的模擬狀態。特效、鏡頭、音訊與 UI 狀態機不在裡面。 */
 const world = createWorld();
-let state = "select",
-  selected = 0,
-  viewTarget = new THREE.Vector3(),
+let   viewTarget = new THREE.Vector3(),
   last = performance.now();
-const keys = new Set(),
-  mouse = new THREE.Vector2(),
-  aim = new THREE.Vector3(0, 0, 0),
-  ray = new THREE.Raycaster(),
-  ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 // 瞄準點是 THREE 的 Vector3，只讀 x / z，直接交給模擬層共用同一個物件。
-world.aim = aim;
-let attackPointerId = null;
-let mouseDown = false,
-  pointerKnown = false,
-  touchVector = { x: 0, z: 0 };
-const coarse = matchMedia("(pointer:coarse)").matches;
+world.aim = input.aim;
+const coarse = input.coarse;
 /**
  * 副作用發射器。ringFx / burst / announce / feed / tone 只負責描述「要發生什麼」，
  * 真正的 THREE 與 DOM 操作集中在 handleEvent，每幀 drain 一次。
@@ -90,7 +92,7 @@ function handleEvent(event) {
     case "damage":
       return showDamageNumber(event.x, event.z, event.text, event.color);
     case "playerDeath":
-      mouseDown = false;
+      input.mouseDown = false;
       return;
     case "matchEnd":
       return endGame(event.win);
@@ -157,8 +159,8 @@ function setupBattle(hero) {
   viewTarget.set(world.player.x, 0, world.player.z);
   $("evolutions").innerHTML = "";
   clearFeed();
-  buildSkills();
-  updateHud();
+  buildSkills(world, playerCast);
+  updateHud(world);
 }
 /**
  * 障礙物在地形建好之後就不再變動，所以導航實例在這裡一次建立，
@@ -194,7 +196,7 @@ const field = {
 };
 
 function setMoveDestination(x, z) {
-  if (state !== "playing" || world.player.hp <= 0) return;
+  if (session.state !== "playing" || world.player.hp <= 0) return;
   const destination = { x: clamp(x, -43.5, 43.5), z: clamp(z, -35.5, 35.5) };
   world.movePath = planPath(world.player, destination);
   if (world.movePath.length) {
@@ -203,213 +205,35 @@ function setMoveDestination(x, z) {
   } else announce("這個位置無法抵達，請點選附近空地。");
 }
 
-function upgradePool() {
-  let a = [...heroUpgrades[world.player.hero], ...commonUpgrades];
-  if (world.evoIndex === 1 || world.evoIndex === 3)
-    a = [
-      ...a,
-      {
-        id: "mega",
-        name: "終極覺醒",
-        desc: "大招的作用範圍大幅擴張，法師的烈焰印記也同步擴大。",
-        icon: "✺",
-        apply: (e) => (e.mods.mega = true),
-      },
-    ];
-  return a.filter((u) => !world.chosen.some((c) => c.id === u.id));
-}
-function showUpgrade() {
-  state = "upgrade";
-  keys.clear();
-  mouseDown = false;
-  let pool = upgradePool();
-  let picks = [];
-  if ((world.evoIndex === 1 || world.evoIndex === 3) && pool.some((u) => u.id === "mega"))
-    picks.push(
-      pool.splice(
-        pool.findIndex((u) => u.id === "mega"),
-        1,
-      )[0],
-    );
-  else {
-    let spec = pool.filter((u) =>
-      heroUpgrades[world.player.hero].some((h) => h.id === u.id),
-    );
-    if (spec.length) {
-      let p = spec[Math.floor(Math.random() * spec.length)];
-      picks.push(p);
-      pool = pool.filter((x) => x !== p);
-    }
-  }
-  while (picks.length < 3 && pool.length)
-    picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-  $("overlay").classList.remove("hidden");
-  $("overlay").innerHTML =
-    `<section class="modal"><span class="eyebrow">EVOLUTION ${String(world.evoIndex + 1).padStart(2, "0")} / 05 · 戰場已暫停</span><h2>${world.evoIndex === 1 || world.evoIndex === 3 ? "迎接你的關鍵進化" : "選擇你的進化"}</h2><p>這場戰鬥，由你定義。選擇一項能力，保留至本局結束。</p><div class="choices">${picks.map((u, i) => `<button class="choice" data-choice="${i}"><small>${heroUpgrades[world.player.hero].some((h) => h.id === u.id) ? "英雄專屬" : u.id === "mega" ? "終極進化" : "共通祝福"}　${u.icon}</small><b>${u.name}</b><p>${u.desc}</p></button>`).join("")}</div><div class="modal-actions"><button id="reroll" ${world.rerolls <= 0 ? "disabled" : ""}>↻ 重抽選項 · 剩餘 ${world.rerolls} 次</button></div></section>`;
-  document.querySelectorAll("[data-choice]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        let u = picks[+b.dataset.choice];
-        u.apply(world.player);
-        world.chosen.push(u);
-        world.evoIndex++;
-        $("evolutions").innerHTML = world.chosen
-          .map((u) => `<span title="${u.desc}">${u.icon} ${u.name}</span>`)
-          .join("");
-        resume();
-        announce(`已獲得進化：${u.name}`);
-        tone(900, 0.2);
-      }),
-  );
-  $("reroll").onclick = () => {
-    if (world.rerolls > 0) {
-      world.rerolls--;
-      showUpgrade();
-    }
-  };
-}
-/**
- * 玩家主動施放技能。
- *
- * 核心層的 cast 不認識 UI 狀態機，所以「現在能不能操作」的判斷留在這裡 ——
- * 技能按鈕在暫停或商店畫面仍然點得到。
- */
+/** 清空輸入狀態，避免覆蓋層關閉後角色還在移動或連打。 */
+const resetInput = () => input.reset();
+const screens = createScreens({
+  world,
+  bases,
+  setupBattle,
+  buildSkills: () => buildSkills(world, playerCast),
+  updateHud: () => updateHud(world),
+  claimBoss,
+  resetInput,
+  coarse,
+});
+const {
+  startScreen,
+  startGame,
+  resume,
+  pauseGame,
+  showShop,
+  showUpgrade,
+  routeChoice,
+  endGame,
+} = screens;
+
 function playerCast(slot) {
-  if (state !== "playing") return;
+  if (session.state !== "playing") return;
   cast(world, field, world.player, slot);
 }
-function buildSkills() {
-  const h = HEROES[world.player.hero];
-  $("heroBadge").textContent = h.icon;
-  $("heroName").textContent = h.name;
-  $("skills").innerHTML = [...h.skills, "閃避"]
-    .map(
-      (name, i) =>
-        `<button class="skill ${i === 2 ? "ultimate" : ""}" data-skill="${i}" title="${name}（${["Q", "E", "R", "空白鍵"][i]}）"><kbd>${["Q", "E", "R", "␣"][i]}</kbd><span class="symbol">${[...h.symbols, "»"][i]}</span><small>${name}</small><span class="cool" style="display:none"></span></button>`,
-    )
-    .join("");
-  document.querySelectorAll("[data-skill]").forEach((b) => {
-    b.onpointerdown = (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      playerCast(+b.dataset.skill);
-    };
-    b.onclick = (e) => {
-      if (e.detail === 0) playerCast(+b.dataset.skill);
-    };
-  });
-}
-function startScreen() {
-  state = "select";
-  selected = selected ?? 0;
-  setupBattle(selected);
-  $("overlay").classList.remove("hidden");
-  $("overlay").innerHTML =
-    `<div class="start-layout"><section class="intro"><span class="eyebrow">一場戰鬥，無限種可能</span><h1>裂境</h1><div class="english">RIFTBOUND</div><p>集結你的隊伍，穿越森林戰線。<br>在隨機進化中找到專屬流派，<br>護送攻城巨獸，擊碎敵方核心。</p><div class="match-meta"><div><b>3 vs 3</b>你與 AI 隊友</div><div><b>8–12 min</b>一場冒險</div><div><b>5 次</b>隨機進化</div></div></section><section class="hero-select"><div class="select-title"><h2>選擇你的英雄</h2><span>四位英雄 · 自由選擇</span></div><div class="hero-grid">${HEROES.map((h, i) => `<button class="hero-card ${selected === i ? "selected" : ""}" data-hero="${i}"><span class="icon">${h.icon}</span><b>${h.name}</b><small>${h.role}</small><span class="check">${selected === i ? "✓" : ""}</span></button>`).join("")}</div><div id="heroDetail" class="hero-detail">${HEROES[selected].desc}</div><button id="start" class="primary">進入戰場　→</button><p class="start-help">${coarse ? "左側搖桿移動 · 點擊技能與普攻 · 自動瞄準附近敵人" : "右鍵 / WASD 移動 · 左鍵普攻 · 面向滑鼠"}</p></section></div>`;
-  document.querySelectorAll("[data-hero]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        selected = +b.dataset.hero;
-        document.querySelectorAll("[data-hero]").forEach((c) => {
-          c.classList.toggle("selected", c === b);
-          c.querySelector(".check").textContent = c === b ? "✓" : "";
-        });
-        $("heroDetail").textContent = HEROES[selected].desc;
-      }),
-  );
-  $("start").onclick = () => startGame(selected);
-}
-function startGame(h) {
-  if (!Number.isInteger(h) || h < 0 || h > 3)
-    throw new Error("請選擇 0 到 3 的英雄");
-  if (state !== "select" && state !== "ended")
-    throw new Error("請先結束目前戰局");
-  setupBattle(h);
-  state = "playing";
-  $("overlay").classList.add("hidden");
-  resumeAudio();
-  announce("戰鬥開始！右鍵或 WASD 移動，左鍵普通攻擊。");
-  return { hero: HEROES[h].name, state };
-}
-function resume() {
-  world.movePath = [];
-  state = "playing";
-  $("overlay").classList.add("hidden");
-  mouseDown = false;
-  keys.clear();
-}
-function pauseGame() {
-  if (state === "paused") {
-    resume();
-    return;
-  }
-  if (state !== "playing") return;
-  state = "paused";
-  world.movePath = [];
-  keys.clear();
-  mouseDown = false;
-  $("overlay").classList.remove("hidden");
-  $("overlay").innerHTML =
-    `<section class="modal pause-box"><span class="eyebrow">TAKE A BREATH</span><h2>戰場已暫停</h2><div class="instructions">右鍵點地　移動至指定位置<br>WASD　手動移動，取消點地路徑<br>角色持續面向滑鼠方向<br>左鍵　普攻（按住可連續攻擊）<br>Q / E　技能　 R　大招<br>空白鍵　閃避　 G　呼叫隊友<br>B　基地裝備　 Esc　暫停<br><br>先推倒任一路防禦塔，再攻擊核心。<br>每 60 / 150 / 240 / 330 / 420 秒進化。<br>靠近己方核心可快速恢復生命。</div><button id="resume" class="primary">繼續戰鬥</button><button id="quit" class="secondary">離開本局，重新選角</button></section>`;
-  $("resume").onclick = resume;
-  $("quit").onclick = startScreen;
-}
-function showShop() {
-  if (state !== "playing") return;
-  if (world.player.hp <= 0 || dist(world.player, bases[0]) > 10) {
-    announce("請返回己方核心附近購買裝備。");
-    return;
-  }
-  state = "shop";
-  mouseDown = false;
-  keys.clear();
-  const cost = 180 + world.shopBuys * 100;
-  $("overlay").classList.remove("hidden");
-  $("overlay").innerHTML =
-    `<section class="modal"><span class="eyebrow">基地補給 · 戰場已暫停</span><h2>準備下一波進攻</h2><p>金幣 ◈ ${Math.floor(world.gold)}　·　每次購買後，下一件裝備價格提高。</p><div class="choices">${[
-      { name: "鋒銳徽章", desc: "所有傷害增加 12%。", icon: "⚔" },
-      { name: "守護護符", desc: "最大生命增加 220，恢復生命。", icon: "♡" },
-      { name: "疾行長靴", desc: "移動速度增加 8%。", icon: "»" },
-    ]
-      .map(
-        (u, i) =>
-          `<button class="choice" data-buy="${i}" ${world.gold < cost ? "disabled" : ""}><small>${u.icon}　◈ ${cost}</small><b>${u.name}</b><p>${u.desc}</p></button>`,
-      )
-      .join(
-        "",
-      )}</div><div class="modal-actions"><button id="closeShop">返回戰場</button></div></section>`;
-  document.querySelectorAll("[data-buy]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        if (world.gold < cost) return;
-        world.gold -= cost;
-        world.shopBuys++;
-        if (+b.dataset.buy === 0)
-          world.player.mods.power = (world.player.mods.power || 0) + 0.12;
-        if (+b.dataset.buy === 1) {
-          world.player.maxHp += 220;
-          world.player.hp = Math.min(world.player.maxHp, world.player.hp + 400);
-        }
-        if (+b.dataset.buy === 2) world.player.speed *= 1.08;
-        resume();
-        announce("裝備已生效！");
-        updateHud();
-      }),
-  );
-  $("closeShop").onclick = resume;
-}
-function endGame(win) {
-  if (state === "ended") return;
-  state = "ended";
-  mouseDown = false;
-  keys.clear();
-  $("overlay").classList.remove("hidden");
-  $("overlay").innerHTML =
-    `<section class="modal pause-box"><span class="eyebrow">${win ? "VICTORY" : "DEFEAT"} · ${clock(world.time)}</span><h2>${win ? "勝利，核心已擊碎！" : "這次，先讓對手一局。"}</h2><p>擊敗 ${world.kills} 位英雄 · 陣亡 ${world.deaths} 次<br>獲得 ${world.chosen.length} 項進化，下局試試另一種組合。</p><div class="instructions">${world.chosen.length ? world.chosen.map((u) => u.icon + " " + u.name).join("<br>") : "新的流派，等你探索。"}</div><button id="again" class="primary">再來一局 · 重新選角</button></section>`;
-  $("again").onclick = startScreen;
-}
-function command(x = aim.x, z = aim.z) {
-  if (state !== "playing") return;
+function command(x = input.aim.x, z = input.aim.z) {
+  if (session.state !== "playing") return;
   world.ping = { x: clamp(x, -43, 43), z: clamp(z, -35, 35), until: world.time + 13 };
   ringFx(world.ping.x, world.ping.z, 4, 0xf0d795, 1.5);
   announce("已呼叫隊友集合，指令持續 13 秒。");
@@ -448,24 +272,8 @@ function claimBoss(team, lane) {
     `${team === 0 ? "我方" : "敵方"}的熔岩龜前往${lane === 0 ? "上" : "下"}路`,
   );
 }
-function routeChoice() {
-  state = "route";
-  mouseDown = false;
-  keys.clear();
-  $("overlay").classList.remove("hidden");
-  $("overlay").innerHTML =
-    '<section class="modal pause-box"><span class="eyebrow">巨獸已收服 · 戰場已暫停</span><h2>讓熔岩龜往哪裡進攻？</h2><p>跟在牠附近，衝撞防禦塔的傷害會大幅提升。</p><button class="primary" id="route0">上路進攻 ↖</button><button class="secondary" id="route1">下路進攻 ↗</button></section>';
-  $("route0").onclick = () => {
-    claimBoss(0, 0);
-    resume();
-  };
-  $("route1").onclick = () => {
-    claimBoss(0, 1);
-    resume();
-  };
-}
 function update(dt) {
-  if (state !== "playing") return;
+  if (session.state !== "playing") return;
   world.time += dt;
   world.gold += dt * 1.6;
   if (world.time >= world.waveAt) {
@@ -524,7 +332,7 @@ function update(dt) {
     world.entities
       .filter((e) => e.type === "core" && e.hp > 0)
       .forEach((e) => {
-        if (state === "playing")
+        if (session.state === "playing")
           damage(world, e, dt * (15 + (world.time - 600) * 0.25), null);
       });
     $("phase").textContent = "核心衰減";
@@ -575,13 +383,13 @@ function update(dt) {
       if (e.stun <= 0) {
         const speed = e.speed * (e.slow > 0 ? 0.5 : 1),
           manualX =
-            (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0) + touchVector.x,
+            (input.keys.has("d") ? 1 : 0) - (input.keys.has("a") ? 1 : 0) + input.touchVector.x,
           manualZ =
-            (keys.has("s") ? 1 : 0) - (keys.has("w") ? 1 : 0) + touchVector.z,
+            (input.keys.has("s") ? 1 : 0) - (input.keys.has("w") ? 1 : 0) + input.touchVector.z,
           manualLength = Math.hypot(manualX, manualZ),
           manualActive =
-            ["w", "a", "s", "d"].some((k) => keys.has(k)) ||
-            Math.hypot(touchVector.x, touchVector.z) > 0;
+            ["w", "a", "s", "d"].some((k) => input.keys.has(k)) ||
+            Math.hypot(input.touchVector.x, input.touchVector.z) > 0;
         e.moving = false;
         if (manualActive) {
           world.movePath = [];
@@ -607,7 +415,7 @@ function update(dt) {
         const dir = aimDirection(world, e);
         if (Math.hypot(dir.x, dir.z) > 0.03)
           e.facing = Math.atan2(dir.x, dir.z);
-        if (mouseDown) attack(world, e);
+        if (input.mouseDown) attack(world, e);
       }
     } else ai(world, field, e, dt);
   }
@@ -726,8 +534,8 @@ function update(dt) {
     return true;
   });
   syncModels(dt);
-  if (state !== "playing") return;
-  updateHud();
+  if (session.state !== "playing") return;
+  updateHud(world);
 }
 /**
  * 模擬 → 場景的單向同步。
@@ -765,42 +573,6 @@ function syncModels(dt) {
     }
   }
 }
-function updateHud() {
-  if (!world.player) return;
-  $("score").innerHTML =
-    `<b class="blue">${world.scores[0]}</b><span>VS</span><b class="red">${world.scores[1]}</b><i></i><time>${clock(world.time)}</time>`;
-  $("level").textContent = `LV. ${world.player.level}`;
-  $("healthFill").style.width =
-    clamp((world.player.hp / world.player.maxHp) * 100, 0, 100) + "%";
-  $("healthText").textContent =
-    `${Math.ceil(Math.max(0, world.player.hp))} / ${world.player.maxHp}${world.player.shield > 0 ? " ＋" + Math.ceil(world.player.shield) : ""}`;
-  $("gold").textContent = "◈ " + Math.floor(world.gold);
-  document.querySelectorAll("[data-skill]").forEach((b, i) => {
-    const c = b.querySelector(".cool");
-    c.style.display = world.player.cd[i] > 0.05 ? "grid" : "none";
-    c.textContent = Math.ceil(world.player.cd[i]);
-  });
-  $("bossTitle").textContent = world.capture
-    ? "巢穴收服中"
-    : world.boss?.hp > 0
-      ? world.boss.team < 0
-        ? "熔岩龜已甦醒"
-        : world.boss.team === 0
-          ? "護送我方熔岩龜"
-          : "攔截敵方熔岩龜"
-      : "熔岩龜甦醒";
-  $("bossTime").textContent = world.capture
-    ? `${world.capture.team === 0 ? "我方" : "敵方"} ${Math.min(100, Math.floor((world.capture.value / 5) * 100))}%`
-    : world.boss?.hp > 0
-      ? world.boss.team < 0
-        ? "中央巢穴 · 爭奪中"
-        : `生命 ${Math.ceil(world.boss.hp)} / ${world.boss.maxHp}`
-      : clock(Math.max(0, world.bossAt - world.time));
-  $("respawn").innerHTML =
-    world.player.hp <= 0
-      ? `重返戰場<br><b style="font-size:48px">${Math.ceil(Math.max(0, world.player.dead))}</b>`
-      : "";
-}
 const aimRing = new THREE.Mesh(
   new THREE.RingGeometry(0.4, 0.49, 24),
   new THREE.MeshBasicMaterial({
@@ -818,15 +590,14 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.045);
   last = now;
   // 觸控裝置、或滑鼠還沒動過時沒有有意義的游標位置，改為自動鎖定。
-  world.autoAim = coarse || !pointerKnown;
-  if (state === "playing") {
-    ray.setFromCamera(mouse, camera);
-    ray.ray.intersectPlane(ground, aim);
+  world.autoAim = input.coarse || !input.pointerKnown;
+  if (session.state === "playing") {
+    refreshAim();
     update(dt);
   }
   // 輸入處理與 UI 也會發事件，所以不論處於哪個狀態都要取用。
   events.drain(handleEvent);
-  if (state === "select") {
+  if (session.state === "select") {
     viewTarget.lerp(new THREE.Vector3(0, 0, 0), 0.04);
     camera.position.lerp(new THREE.Vector3(4, 68, 57), 0.035);
     camera.lookAt(viewTarget);
@@ -839,120 +610,29 @@ function frame(now) {
     camera.lookAt(viewTarget.x, 0, viewTarget.z - 3);
   }
   aimRing.visible =
-    state === "playing" && pointerKnown && !coarse && world.player?.hp > 0;
-  aimRing.position.set(aim.x, 0.17, aim.z);
+    session.state === "playing" &&
+    input.pointerKnown &&
+    !input.coarse &&
+    world.player?.hp > 0;
+  aimRing.position.set(input.aim.x, 0.17, input.aim.z);
   renderer.render(scene, camera);
-  drawLabels(world, state);
-  drawMap(world, state);
+  drawLabels(world, session.state);
+  drawMap(world, session.state);
 }
-function pointerAim(e) {
-  mouse.set((e.clientX / W) * 2 - 1, (-e.clientY / H) * 2 + 1);
-  pointerKnown = true;
-  camera.updateMatrixWorld();
-  ray.setFromCamera(mouse, camera);
-  ray.ray.intersectPlane(ground, aim);
-}
-window.addEventListener("pointermove", pointerAim);
-$("world").addEventListener("pointerdown", (e) => {
-  if (state !== "playing" || world.player.hp <= 0) return;
-  pointerAim(e);
-  if (e.button === 2) {
-    e.preventDefault();
-    setMoveDestination(aim.x, aim.z);
-  } else if (e.button === 0) {
-    attackPointerId = e.pointerId;
-    mouseDown = true;
-    attack(world, world.player);
-    resumeAudio();
-  }
+bindInput({
+  world,
+  resumeAudio,
+  toggleSound: () => {
+    $("sound").textContent = toggleMute() ? "♫ 靜音" : "♫ 音效";
+  },
+  playerCast,
+  attack,
+  setMoveDestination,
+  command,
+  showShop,
+  pauseGame,
+  resume,
 });
-function releaseAttackPointer(e) {
-  if (e.pointerId === attackPointerId) {
-    attackPointerId = null;
-    mouseDown = false;
-  }
-}
-window.addEventListener("pointerup", releaseAttackPointer);
-window.addEventListener("pointercancel", releaseAttackPointer);
-$("world").addEventListener("contextmenu", (e) => e.preventDefault());
-window.addEventListener("keydown", (e) => {
-  if ([" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key))
-    e.preventDefault();
-  if (e.repeat) return;
-  const k = e.key.toLowerCase();
-  if (k === "escape") {
-    if (state === "shop") resume();
-    else pauseGame();
-    return;
-  }
-  if (state !== "playing") return;
-  keys.add(k);
-  if (["w", "a", "s", "d"].includes(k)) world.movePath = [];
-  if (k === "q") playerCast(0);
-  if (k === "e") playerCast(1);
-  if (k === "r") playerCast(2);
-  if (k === " ") playerCast(3);
-  if (k === "g") command();
-  if (k === "b") showShop();
-});
-window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-window.addEventListener("blur", () => {
-  keys.clear();
-  mouseDown = false;
-  touchVector = { x: 0, z: 0 };
-  if (state === "playing") pauseGame();
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden && state === "playing") pauseGame();
-});
-$("pause").onclick = pauseGame;
-$("sound").onclick = () => {
-  $("sound").textContent = toggleMute() ? "♫ 靜音" : "♫ 音效";
-};
-$("shopButton").onclick = showShop;
-$("minimap").onclick = (e) => {
-  const r = e.currentTarget.getBoundingClientRect();
-  command(
-    ((e.clientX - r.left) / r.width) * 94 - 47,
-    ((e.clientY - r.top) / r.height) * 80 - 40,
-  );
-};
-let touchId = null;
-const joystick = $("touchMove");
-function joy(e) {
-  const r = joystick.getBoundingClientRect();
-  let x = clamp((e.clientX - r.left - r.width / 2) / 36, -1, 1),
-    z = clamp((e.clientY - r.top - r.height / 2) / 36, -1, 1);
-  touchVector = { x, z };
-  joystick.firstChild.style.transform = `translate(${x * 29}px,${z * 29}px)`;
-}
-joystick.addEventListener("pointerdown", (e) => {
-  if (touchId !== null) return;
-  e.preventDefault();
-  touchId = e.pointerId;
-  joystick.setPointerCapture(e.pointerId);
-  joy(e);
-});
-joystick.addEventListener("pointermove", (e) => {
-  if (e.pointerId === touchId) joy(e);
-});
-for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
-  joystick.addEventListener(event, (e) => {
-    if (e.pointerId !== touchId) return;
-    touchId = null;
-    touchVector = { x: 0, z: 0 };
-    joystick.firstChild.style.transform = "none";
-  });
-$("touchAttack").addEventListener("pointerdown", (e) => {
-  e.preventDefault();
-  if (state !== "playing" || world.player.hp <= 0) return;
-  attackPointerId = e.pointerId;
-  e.currentTarget.setPointerCapture(e.pointerId);
-  mouseDown = true;
-  attack(world, world.player);
-});
-for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
-  $("touchAttack").addEventListener(event, releaseAttackPointer);
 
 startScreen();
 requestAnimationFrame(frame);
@@ -971,7 +651,7 @@ if (document.modelContext?.registerTool) {
       },
       annotations: { readOnlyHint: true },
       execute: () => ({
-        state,
+        state: session.state,
         seconds: Math.floor(world.time),
         hero: world.player ? HEROES[world.player.hero].name : null,
         health: world.player ? Math.ceil(world.player.hp) : null,
