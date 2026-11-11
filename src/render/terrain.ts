@@ -11,6 +11,7 @@ import type { Obstacle } from "../core/navigation.js";
 import { createRng, TERRAIN_SEED } from "../core/rng.js";
 import { TEAM_COLORS } from "../config/colors.js";
 import { box, cyl, mesh, scene, sphere } from "./renderer.js";
+import { plantTrees, type TreePlacement } from "./trees.js";
 
 const mapRoot = new THREE.Group();
 scene.add(mapRoot);
@@ -104,6 +105,7 @@ pitRing.rotation.x = Math.PI / 2;
 const seeded = createRng(TERRAIN_SEED);
 /** 樹木的碰撞圓。模擬層繞路與推擠都以這份資料為準。 */
 const obstacles: Obstacle[] = [];
+const treePlacements: TreePlacement[] = [];
 function nearLane(x: number, z: number, d = 6) {
   return lanePoints.some((ps) =>
     ps.some((p, i) => i % 3 === 0 && Math.hypot(x - p.x, z - p.z) < d),
@@ -120,22 +122,16 @@ for (let i = 0; i < 360; i++) {
     Math.hypot(x - 34, z + 25) < 10
   )
     continue;
-  let s = 0.75 + seeded() * 1.05;
-  const tree = new THREE.Group();
-  tree.position.set(x, 0, z);
-  mapRoot.add(tree);
-  cyl(0.23, 0.4, 2, 0x665c42, 0, 1, 0, tree, 5);
-  sphere(
-    1.9 * s,
-    [0x315d42, 0x3e724a, 0x547f48, 0x658b48][i % 4],
-    0,
-    2.8 * s,
-    0,
-    tree,
-  );
-  sphere(1.4 * s, 0x527c46, 0.6 * s, 4 * s, 0.2, tree);
+  // 亂數的取用順序（x、z、s）不能動：後面的石頭與草叢共用同一條序列，
+  // 少取或多取一次，整張地圖就換了一張，碰撞資料也跟著變。
+  const s = 0.75 + seeded() * 1.05;
+  treePlacements.push({ x, z, scale: s, tint: i % 4 });
   obstacles.push({ x, z, r: 0.65 });
 }
+// 樹的模型非同步載入，晚一點才出現在場景裡；碰撞資料已經在上面同步備妥。
+plantTrees(treePlacements, mapRoot).catch((error) => {
+  console.error("樹木模型載入失敗", error);
+});
 for (let i = 0; i < 115; i++) {
   let x = seeded() * 88 - 44,
     z = seeded() * 72 - 36;

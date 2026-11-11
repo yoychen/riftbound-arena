@@ -11,6 +11,7 @@
 - `src/ui/`：狀態機、覆蓋層畫面、HUD、提示與音效。
 - `src/input/`：鍵盤、滑鼠與觸控。
 - `src/main.ts`：把各層接起來，並跑賽局迴圈。
+- `art/`：Blender 模型的生成腳本與 `.blend` 原始檔；匯出的 `.glb` 在 `src/assets/models/`。
 
 重構的完整過程與各階段決策見 `docs/refactor-plan.md`。
 
@@ -46,6 +47,16 @@ npm run typecheck # tsc --noEmit
 npm run smoke       # 瀏覽器冒煙檢查，需另一個終端機先跑 npm run dev
 npm run smoke:touch # 觸控裝置的冒煙檢查（搖桿、觸控普攻）
 ```
+
+## 重建 Blender 模型
+
+模型由腳本生成，要調整形狀時改腳本重跑，不要直接改 `.glb`。需要 Blender 5.2 以上：
+
+```sh
+blender --background --factory-startup --python art/build_tree.py
+```
+
+會覆寫 `art/tree.blend` 與 `src/assets/models/tree.glb`。匯出約定（物件名稱、原點、頂點色只帶明暗）寫在腳本開頭。
 
 ## 輸出靜態網站
 

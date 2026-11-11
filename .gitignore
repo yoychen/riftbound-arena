@@ -1,3 +1,5 @@
 dist/
 node_modules/
 .DS_Store
+# Blender 存檔時自動產生的備份
+*.blend1
