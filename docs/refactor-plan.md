@@ -91,7 +91,7 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 | 4 | entities / targeting / combat | combat 25、kill 15、targeting 9、entities 7 | ✅ |
 | 5 | skills 技能表資料化 + ai + movement | skills 28、ai 27、movement 12 | ✅ |
 | 6 | render / ui / input 拆檔 | 瀏覽器輸入層檢查 9 項 | ✅ |
-| 7 | 修既知問題（見下） | 迴歸測試護網已就位 + 差異比對 | |
+| 7 | 修既知問題（見下） | 迴歸測試護網已就位 + 差異比對；projectiles 13、evolutions 2 | ✅ |
 | 8 | 逐檔 .js → .ts | 觸控冒煙檢查 5 項；型別找出一個真實 bug | ✅ |
 
 階段 2 是樞紐也是唯一的危險點：它之前無法寫有意義的測試，它之後每一步都有網子。
@@ -117,13 +117,15 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 
    全部落在一幀 16.7 ms 的預算內。以 6000 組線段查詢與 480 組路徑規劃對照
    線性掃描驗證，結果完全一致（`tests/obstacleGrid.test.ts`）。
-2. **`updateHud()` 每幀重寫 innerHTML** 並重跑 `querySelectorAll`。應快取節點、
-   髒值才寫。
+2. ~~**`updateHud()` 每幀重寫 innerHTML**~~ — 階段 7 修正。節點查一次就快取，
+   每個欄位記住上次寫入的值，相同就不碰 DOM；技能冷卻遮罩在 `buildSkills()`
+   重建技能列時一併重抓。這些節點只有 `hud.js` 會寫，快取因此不會與畫面脫節。
+   血條寬度取到小數一位，避免每幀都因浮點尾數不同而重寫。
 3. ~~**`damage()` 無敵判定順序錯誤**~~ — 階段 7 修正。`invuln` 檢查移到函式最前面，
    無敵期間的攻擊現在完全不存在：不反傷、不上緩速、不累積 mark、不吸血、
    不引來塔的仇恨、不產生任何特效。
-4. **核心保護條件是三層雙重否定** — 邏輯正確但無法閱讀，應抽成
-   `isCoreShielded(team)`。
+4. ~~**核心保護條件是三層雙重否定**~~ — 階段 4 搬進 `combat.ts` 時已抽成
+   `coreIsShielded(world, core)`，當時漏了更新這份清單。
 5. ~~**`clearBattle()` 沒有 dispose geometry**~~ — 階段 7 修正。實測連開六局，
    JS 堆積從 **2.6 MB 線性成長降到 0.2 MB**（量測雜訊範圍內，不再累積）。
    `clearEffects()` 有同樣的問題，一併修正。
@@ -131,7 +133,11 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
    材質大多來自 `mat()` 的共用快取，釋放掉會讓還在場上的單位變黑，所以
    `disposeModel()` 預設只釋放幾何；只有自己 `new` 出來的材質（區域圓盤、
    擴散光環）才傳 `disposeMaterial`。
-6. **投射物碰撞在 `dt === 0` 時產生 NaN** — 該幀命中判定靜默失效。
+6. ~~**投射物碰撞在 `dt === 0` 時產生 NaN**~~ — 階段 7 修正。投射物結算從
+   `main.js` 搬進 `core/projectiles.ts`（`stepProjectiles`），才寫得了測試。
+   零長度線段退化成點對點距離，貼臉的敵人照樣命中。順手修掉同類問題：
+   彈射目標與命中點重合時方向向量也會除以零，現在沿用原本的飛行方向。
+   移除耗盡的投射物與釋放模型仍留在呈現層。
 7. ~~**`move()` 碰撞推擠只做一次**~~ — 階段 7 修正。實測密集樹叢中有 **14%** 的
    移動會被推進另一棵樹，比原本估計的「偶爾」嚴重得多。
 
@@ -156,8 +162,9 @@ world.events.push({ type: "sound", freq: 760, dur: 0.14 });
 
    尾端的改善明顯大於中位數，符合 GC 壓力的推論。剩下的 2.7 MB 來自 AI 與技能
    路徑上大量的小物件（方向向量、目標點），再壓下去要犧牲可讀性，不划算。
-9. **進化 id `bounce` 跨英雄重複**（射手連鎖飛矢／法師電弧法球）。目前無害，
-   因為一局只取單一英雄的池，但讓「id 全域唯一」假設失效。
+9. ~~**進化 id `bounce` 跨英雄重複**~~ — 階段 7 修正。改名為 `chainArrow`
+   （射手）與 `arcOrb`（法師）。id 只用於抽選去重與分類顯示，效果旗標
+   `mods.bounce` 不變。`tests/evolutions.test.ts` 守住 id 全域唯一。
 10. ~~**起點卡在障礙物內時 `planPath()` 回傳空陣列**~~ — 階段 7 修正，而真正的
     根因比原本的診斷更深：
 

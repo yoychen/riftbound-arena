@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const coreDir = new URL("../src/core/", import.meta.url).pathname;
+const coreDir = fileURLToPath(new URL("../src/core/", import.meta.url));
 const coreFiles = readdirSync(coreDir).filter((f: string) => f.endsWith(".ts"));
 
 /**
@@ -24,7 +25,7 @@ describe("原始碼全部是 TypeScript", () => {
         else if (entry.name.endsWith(".js")) stray.push(full);
       }
     };
-    walk(new URL("../src/", import.meta.url).pathname);
+    walk(fileURLToPath(new URL("../src/", import.meta.url)));
     expect(stray).toEqual([]);
   });
 });

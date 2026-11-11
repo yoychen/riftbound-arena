@@ -90,7 +90,7 @@ export const heroUpgrades: Upgrade[][] = [
   ],
   [
     {
-      id: "bounce",
+      id: "chainArrow",
       name: "連鎖飛矢",
       desc: "箭矢命中後，彈射至附近另一名敵人。",
       icon: "➶",
@@ -127,7 +127,7 @@ export const heroUpgrades: Upgrade[][] = [
       apply: (e: Entity) => (e.mods.combo = true),
     },
     {
-      id: "bounce",
+      id: "arcOrb",
       name: "電弧法球",
       desc: "法球命中後彈射至另一名敵人，形成連鎖攻擊。",
       icon: "ϟ",

@@ -66,6 +66,7 @@ import { addZone, damage, kill, shoot } from "./core/combat.js";
 import { dash, move } from "./core/movement.js";
 import { aimDirection, attack, cast } from "./core/skills.js";
 import { ai } from "./core/ai.js";
+import { stepProjectiles } from "./core/projectiles.js";
 import { TEAM_COLORS } from "./config/colors.js";
 
 /** 這一局的模擬狀態。特效、鏡頭、音訊與 UI 狀態機不在裡面。 */
@@ -76,15 +77,13 @@ let   viewTarget = new THREE.Vector3(),
 world.aim = input.aim;
 const coarse = input.coarse;
 /**
- * 副作用發射器。ringFx / burst / announce / feed / tone 只負責描述「要發生什麼」，
+ * 副作用發射器。ringFx / announce / feed / tone 只負責描述「要發生什麼」，
  * 真正的 THREE 與 DOM 操作集中在 handleEvent，每幀 drain 一次。
  * 佇列本身掛在 world 上，核心層的戰鬥邏輯也往同一條管線送。
  */
 const events = world.events;
 const ringFx = (x: number, z: number, r: number, color: number, life = 0.45) =>
   events.emit({ type: "ring", x, z, r, color, life });
-const burst = (x: number, z: number, color: number, count = 10) =>
-  events.emit({ type: "burst", x, z, color, count });
 const damageNumber = (x: number, z: number, text: number, color: string) =>
   events.emit({ type: "damage", x, z, text, color });
 const announce = (text: string) => events.emit({ type: "announce", text });
@@ -452,68 +451,7 @@ function update(dt: number) {
       }
     } else ai(world, field, e, dt);
   }
-  for (const p of world.projectiles) {
-    let step = p.speed * dt;
-    let ox = p.x,
-      oz = p.z;
-    p.x += p.dx * step;
-    p.z += p.dz * step;
-    p.left -= step;
-    for (const t of world.entities) {
-      if (
-        t.hp <= 0 ||
-        t.team === p.source.team ||
-        p.hit.has(t.id) ||
-        t === p.source
-      )
-        continue;
-      let a = clamp(((t.x - ox) * p.dx + (t.z - oz) * p.dz) / step, 0, 1),
-        dd = Math.hypot(
-          t.x - (ox + (p.x - ox) * a),
-          t.z - (oz + (p.z - oz) * a),
-        );
-      if (
-        dd <
-        (t.type === "boss"
-          ? 2.5
-          : t.type === "tower" || t.type === "core"
-            ? 1.5
-            : 0.6) +
-          p.radius
-      ) {
-        damage(world, t, p.damage, p.source, p.skill);
-        if (p.slow) t.slow = p.slow;
-        p.hit.add(t.id);
-        burst(t.x, t.z, p.source.team === 0 ? 0xa8e6d9 : 0xf7b493, 3);
-        if (p.bounce) {
-          const next = world.entities
-            .filter(
-              (e) =>
-                e.hp > 0 &&
-                e.team !== p.source.team &&
-                !p.hit.has(e.id) &&
-                e !== p.source &&
-                dist(e, t) < 7,
-            )
-            .sort((a, b) => dist(a, t) - dist(b, t))[0];
-          if (next) {
-            let d = dist(t, next);
-            p.x = t.x;
-            p.z = t.z;
-            p.dx = (next.x - t.x) / d;
-            p.dz = (next.z - t.z) / d;
-            p.left = 8;
-            p.bounce = false;
-            break;
-          }
-        }
-        if (!p.pierce) {
-          p.left = -1;
-          break;
-        }
-      }
-    }
-  }
+  stepProjectiles(world, dt);
   world.projectiles = world.projectiles.filter((p) => {
     if (p.left <= 0) {
       if (p.model) {
