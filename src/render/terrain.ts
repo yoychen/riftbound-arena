@@ -10,8 +10,10 @@ import * as THREE from "three";
 import type { Obstacle } from "../core/navigation.js";
 import { createRng, TERRAIN_SEED } from "../core/rng.js";
 import { TEAM_COLORS } from "../config/colors.js";
-import { box, cyl, mesh, scene, sphere } from "./renderer.js";
+import { box, cyl, mesh, scene } from "./renderer.js";
 import { plantTrees, type TreePlacement } from "./trees.js";
+import { placeGrass, placeRocks, placeTiles, type RockPlacement } from "./props.js";
+import type { Placement } from "./instancing.js";
 
 const mapRoot = new THREE.Group();
 scene.add(mapRoot);
@@ -106,6 +108,10 @@ const seeded = createRng(TERRAIN_SEED);
 /** 樹木的碰撞圓。模擬層繞路與推擠都以這份資料為準。 */
 const obstacles: Obstacle[] = [];
 const treePlacements: TreePlacement[] = [];
+const rocks: RockPlacement[] = [];
+const grass: Placement[] = [];
+const tiles: Placement[] = [];
+const UNIT = { x: 1, y: 1, z: 1 };
 function nearLane(x: number, z: number, d = 6) {
   return lanePoints.some((ps) =>
     ps.some((p, i) => i % 3 === 0 && Math.hypot(x - p.x, z - p.z) < d),
@@ -136,37 +142,32 @@ for (let i = 0; i < 115; i++) {
   let x = seeded() * 88 - 44,
     z = seeded() * 72 - 36;
   if (nearLane(x, z, 4) || Math.hypot(x, z) < 8) continue;
-  let s = 0.4 + seeded();
-  let rock = sphere(
-    s,
-    [0x8a9781, 0x737f72, 0xa9af91][i % 3],
+  // 亂數取用順序與原本相同：x、z、s、朝向。
+  const s = 0.4 + seeded();
+  rocks.push({
     x,
-    s * 0.6,
+    y: s * 0.6,
     z,
-    mapRoot,
-  );
-  rock.scale.set(1.5, 0.9, 1);
-  rock.rotation.y = seeded() * 6;
+    rotationY: seeded() * 6,
+    // 原本是半徑 s 的球再壓成 1.5 × 0.9 × 1；模型半徑為 1，所以直接相乘。
+    scale: { x: 1.5 * s, y: 0.9 * s, z: s },
+    color: [0x8a9781, 0x737f72, 0xa9af91][i % 3],
+  });
 }
 for (let i = 0; i < 210; i++) {
   let x = seeded() * 90 - 45,
     z = seeded() * 74 - 37;
-  if (!nearLane(x, z, 3) && Math.hypot(x, z) > 8) {
-    const g = mesh(
-      new THREE.ConeGeometry(0.25, 0.7, 3),
-      0x91a85a,
-      x,
-      0.3,
-      z,
-      mapRoot,
-    );
-    g.rotation.y = seeded() * 6;
-  }
+  // 朝向只在真的放草時才取亂數，與原本相同。
+  if (!nearLane(x, z, 3) && Math.hypot(x, z) > 8)
+    grass.push({ x, y: 0.3, z, rotationY: seeded() * 6, scale: UNIT });
 }
-for (const p of lanePoints.flat().filter((_, i) => i % 10 === 0)) {
-  const tile = box(0.3, 0.04, 0.7, 0xd4ceaa, p.x, 0.08, p.z, mapRoot);
-  tile.rotation.y = seeded() * 6;
-}
+for (const p of lanePoints.flat().filter((_, i) => i % 10 === 0))
+  tiles.push({ x: p.x, y: 0.08, z: p.z, rotationY: seeded() * 6, scale: UNIT });
+placeGrass(grass, mapRoot);
+placeTiles(tiles, mapRoot);
+placeRocks(rocks, mapRoot).catch((error) => {
+  console.error("石頭模型載入失敗", error);
+});
 const bases = [
     { x: -34, z: 25 },
     { x: 34, z: -25 },

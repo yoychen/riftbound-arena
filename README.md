@@ -54,9 +54,10 @@ npm run smoke:touch # 觸控裝置的冒煙檢查（搖桿、觸控普攻）
 
 ```sh
 blender --background --factory-startup --python art/build_tree.py
+blender --background --factory-startup --python art/build_rock.py
 ```
 
-會覆寫 `art/tree.blend` 與 `src/assets/models/tree.glb`。匯出約定（物件名稱、原點、頂點色只帶明暗）寫在腳本開頭。
+每支腳本會覆寫 `art/<名稱>.blend` 與 `src/assets/models/<名稱>.glb`。共同的匯出約定（1 單位 = 1 公尺、頂點色只帶明暗、碰撞不從模型推算）寫在 `art/lowpoly.py`，各模型的物件名稱與原點寫在各自腳本開頭。
 
 ## 輸出靜態網站
 
