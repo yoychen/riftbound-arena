@@ -5,12 +5,22 @@
  */
 import * as THREE from "three";
 
-export const $ = (id) => document.getElementById(id);
+/**
+ * 取得畫面上的元素。
+ *
+ * 所有 id 都寫死在 index.html 裡，所以回傳非 null 的型別；真的找不到時
+ * 明確拋錯，而不是讓 null 一路傳下去在別處炸開。
+ */
+export function $(id: string): HTMLElement {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`找不到元素 #${id}`);
+  return el;
+}
 
-let renderer;
+let renderer: THREE.WebGLRenderer;
 try {
   renderer = new THREE.WebGLRenderer({
-    canvas: $("world"),
+    canvas: $("world") as HTMLCanvasElement,
     antialias: true,
     powerPreference: "high-performance",
   });
@@ -51,8 +61,9 @@ Object.assign(sun.shadow.camera, {
 });
 sun.shadow.bias = -0.001;
 scene.add(sun);
-const materials = new Map();
-function mat(c, em = 0) {
+/** 材質依「顏色＋自發光強度」共用，場上數千個網格只會用到十幾種。 */
+const materials = new Map<string, THREE.MeshStandardMaterial>();
+function mat(c: number, em = 0): THREE.MeshStandardMaterial {
   const k = c + ":" + em;
   if (!materials.has(k))
     materials.set(
@@ -65,9 +76,17 @@ function mat(c, em = 0) {
         emissiveIntensity: em,
       }),
     );
-  return materials.get(k);
+  return materials.get(k)!;
 }
-function mesh(geo, c, x = 0, y = 0, z = 0, parent = scene, em = 0) {
+function mesh(
+  geo: THREE.BufferGeometry,
+  c: number,
+  x = 0,
+  y = 0,
+  z = 0,
+  parent: THREE.Object3D = scene,
+  em = 0,
+): THREE.Mesh {
   const m = new THREE.Mesh(geo, mat(c, em));
   m.position.set(x, y, z);
   m.castShadow = true;
@@ -75,17 +94,40 @@ function mesh(geo, c, x = 0, y = 0, z = 0, parent = scene, em = 0) {
   parent.add(m);
   return m;
 }
-const box = (w, h, d, c, x, y, z, p) =>
-    mesh(new THREE.BoxGeometry(w, h, d), c, x, y, z, p),
-  sphere = (r, c, x, y, z, p, detail = 0) =>
-    mesh(new THREE.IcosahedronGeometry(r, detail), c, x, y, z, p),
-  cyl = (rt, rb, h, c, x, y, z, p, n = 8) =>
-    mesh(new THREE.CylinderGeometry(rt, rb, h, n), c, x, y, z, p);
+type Vec = [x: number, y: number, z: number];
+
+const box = (
+    w: number,
+    h: number,
+    d: number,
+    c: number,
+    ...at: [...Vec, parent?: THREE.Object3D]
+  ) => mesh(new THREE.BoxGeometry(w, h, d), c, ...at),
+  sphere = (
+    r: number,
+    c: number,
+    x: number,
+    y: number,
+    z: number,
+    p?: THREE.Object3D,
+    detail = 0,
+  ) => mesh(new THREE.IcosahedronGeometry(r, detail), c, x, y, z, p),
+  cyl = (
+    rt: number,
+    rb: number,
+    h: number,
+    c: number,
+    x: number,
+    y: number,
+    z: number,
+    p?: THREE.Object3D,
+    n = 8,
+  ) => mesh(new THREE.CylinderGeometry(rt, rb, h, n), c, x, y, z, p);
 
 export { renderer, scene, camera, sun, mat, mesh, box, sphere, cyl };
 
-const ctx = $("labels").getContext("2d"),
-  mapctx = $("minimap").getContext("2d");
+const ctx = ($("labels") as HTMLCanvasElement).getContext("2d")!,
+  mapctx = ($("minimap") as HTMLCanvasElement).getContext("2d")!;
 let W = innerWidth,
   H = innerHeight;
 const proj = new THREE.Vector3();
@@ -95,13 +137,14 @@ function resize() {
   renderer.setSize(W, H);
   camera.aspect = W / H;
   camera.updateProjectionMatrix();
-  $("labels").width = W * devicePixelRatio;
-  $("labels").height = H * devicePixelRatio;
+  const labels = $("labels") as HTMLCanvasElement;
+  labels.width = W * devicePixelRatio;
+  labels.height = H * devicePixelRatio;
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 }
 window.addEventListener("resize", resize);
 resize();
-function screen(x, y, z) {
+function screen(x: number, y: number, z: number) {
   proj.set(x, y, z).project(camera);
   return {
     x: ((proj.x + 1) * W) / 2,

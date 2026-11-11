@@ -35,11 +35,11 @@ function advanceAlongLane(
   entity: Entity,
   step: number,
 ): Point {
-  entity.progress = field.progressOn(entity.lane as number, entity);
+  entity.progress = field.progressOn(entity.lane, entity);
   return field.pointOnLane(
-    entity.lane as number,
+    entity.lane,
     clamp(
-      (entity.progress as number) + (entity.team === 0 ? step : -step),
+      (entity.progress) + (entity.team === 0 ? step : -step),
       0,
       1,
     ),
@@ -48,8 +48,8 @@ function advanceAlongLane(
 
 /** 防禦塔與核心不會移動，射程內有目標就開火。 */
 function defendStructure(world: World, entity: Entity, target?: Entity): void {
-  if (!target || dist(entity, target) > (entity.range as number)) return;
-  if ((entity.attack as number) > 0) return;
+  if (!target || dist(entity, target) > (entity.range)) return;
+  if ((entity.attack) > 0) return;
 
   entity.attack = entity.type === "tower" ? 1.15 : 1.5;
   shoot(
@@ -57,8 +57,8 @@ function defendStructure(world: World, entity: Entity, target?: Entity): void {
     entity,
     { x: target.x - entity.x, z: target.z - entity.z },
     {
-      range: (entity.range as number) + 2,
-      damage: entity.damage as number,
+      range: (entity.range) + 2,
+      damage: entity.damage,
       speed: 24,
       big: true,
     },
@@ -69,7 +69,7 @@ function defendStructure(world: World, entity: Entity, target?: Entity): void {
 function guardPit(world: World, entity: Entity, target?: Entity): Point | null {
   if (!target || dist(entity, PIT) >= 7) return PIT;
 
-  if (dist(entity, target) < 5 && (entity.attack as number) <= 0) {
+  if (dist(entity, target) < 5 && (entity.attack) <= 0) {
     entity.attack = 2.5;
     addZone(world, entity.x, entity.z, 5, 0.9, entity, 160, 0xf79c65, 0.65);
   }
@@ -93,7 +93,7 @@ function heroDestination(
 
   // 玩家按 G 的集合指令，只有我方 AI 隊友會聽。
   if (entity.team === 0 && world.ping && world.ping.until > world.time) {
-    const inCombat = target && dist(entity, target) < (entity.range as number);
+    const inCombat = target && dist(entity, target) < (entity.range);
     return { dest: inCombat ? null : world.ping, target };
   }
 
@@ -108,7 +108,7 @@ function heroDestination(
     if (contesting)
       return {
         dest: boss,
-        target: dist(entity, boss) < (entity.range as number) + 1 ? boss : target,
+        target: dist(entity, boss) < (entity.range) + 1 ? boss : target,
       };
   }
   // 護送自家的攻城巨獸。
@@ -129,10 +129,10 @@ function fightAsHero(
   const d = { x: target.x - entity.x, z: target.z - entity.z };
   entity.facing = Math.atan2(d.x, d.z);
 
-  if ((entity.attack as number) <= 0) {
-    if ((entity.range as number) > 6) {
+  if ((entity.attack) <= 0) {
+    if ((entity.range) > 6) {
       // 遠程 AI 直接發射，不走 attack()：它的扇形判定只適用近戰。
-      entity.attack = HEROES[entity.hero as number].rate;
+      entity.attack = HEROES[entity.hero].rate;
       shoot(world, entity, d);
     } else attack(world, entity);
   }
@@ -143,7 +143,7 @@ function fightAsHero(
     target.type === "boss" ||
     countEnemies(world, entity, 8) > 2;
   if (worthSkills) {
-    const cd = entity.cd as number[];
+    const cd = entity.cd;
     if (cd[0] <= 0) cast(world, field, entity, 0);
     // 法師的烈焰印記是主力輸出，其他英雄的 E 多半是保命技。
     if (cd[1] <= 0 && (entity.hero === 2 || entity.hp < entity.maxHp * LEAVE_BASE_AT))
@@ -151,14 +151,14 @@ function fightAsHero(
     if (cd[2] <= 0 && world.time > 22) cast(world, field, entity, 2);
   }
 
-  const range = entity.range as number;
+  const range = entity.range;
   const distance = dist(entity, target);
   // 遠程被貼臉就後退，距離舒適時原地繞圈，近戰則站著打。
   if (range > 6 && distance < 5) return { x: entity.x - d.x, z: entity.z - d.z };
   if (range > 6 && distance < range * 0.85)
     return {
-      x: entity.x + Math.sin(world.time + (entity.id as number)) * 2,
-      z: entity.z + Math.cos(world.time * 0.7 + (entity.id as number)) * 2,
+      x: entity.x + Math.sin(world.time + (entity.id)) * 2,
+      z: entity.z + Math.cos(world.time * 0.7 + (entity.id)) * 2,
     };
   return null;
 }
@@ -171,7 +171,7 @@ function minionDestination(
   target: Entity | undefined,
 ): Point | null {
   if (!target) return advanceAlongLane(field, entity, LANE_STEP.minion);
-  if (dist(entity, target) > (entity.range as number)) return target;
+  if (dist(entity, target) > (entity.range)) return target;
 
   entity.facing = Math.atan2(target.x - entity.x, target.z - entity.z);
   attack(world, entity);
@@ -197,11 +197,11 @@ function siegeDestination(
   if (dist(entity, target) >= 6) {
     const ahead = advanceAlongLane(field, entity, LANE_STEP.boss);
     // 被推離兵線太遠就先歸位，否則會卡在地形上原地打轉。
-    const onLane = field.pointOnLane(entity.lane as number, entity.progress as number);
+    const onLane = field.pointOnLane(entity.lane, entity.progress);
     return dist(entity, onLane) > 5 ? onLane : ahead;
   }
 
-  if ((entity.attack as number) <= 0) {
+  if ((entity.attack) <= 0) {
     entity.attack = 2.4;
     // 有英雄護送時撞擊威力大幅提升 —— 這是護送巨獸的意義所在。
     const escorted = world.entities.some(
@@ -224,14 +224,14 @@ export function ai(
   entity: Entity,
   dt: number,
 ): void {
-  if ((entity.stun as number) > 0) return;
+  if ((entity.stun) > 0) return;
 
   let target = targetFor(
     world,
     entity,
-    entity.type === "hero" ? HERO_VISION : (entity.range as number) + 0.8,
+    entity.type === "hero" ? HERO_VISION : (entity.range) + 0.8,
   );
-  const speed = (entity.speed as number) * ((entity.slow as number) > 0 ? SLOW_FACTOR : 1);
+  const speed = (entity.speed) * ((entity.slow) > 0 ? SLOW_FACTOR : 1);
   let dest: Point | null = null;
 
   if (entity.type === "tower" || entity.type === "core") {
@@ -245,7 +245,7 @@ export function ai(
     const chosen = heroDestination(world, field, entity, target);
     dest = chosen.dest;
     target = chosen.target;
-    if (target && dist(entity, target) <= (entity.range as number) + 1)
+    if (target && dist(entity, target) <= (entity.range) + 1)
       dest = fightAsHero(world, field, entity, target);
   } else if (entity.type === "minion") {
     dest = minionDestination(world, field, entity, target);
