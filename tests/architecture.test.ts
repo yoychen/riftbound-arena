@@ -12,6 +12,23 @@ const coreFiles = readdirSync(coreDir).filter((f: string) => f.endsWith(".ts"));
  * import THREE 或呼叫 document，測試就得跟著搬進瀏覽器，這條線就守不住了。
  * 與其靠紀律，不如讓它在 CI 上直接紅掉。
  */
+describe("原始碼全部是 TypeScript", () => {
+  it("src/ 底下沒有 .js 檔案", () => {
+    // tsconfig 的 allowJs 已關閉，所以新加的 .js 不會被檢查也不會被發現。
+    // 這裡明確擋下來，避免型別覆蓋率在不知不覺中倒退。
+    const stray: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".js")) stray.push(full);
+      }
+    };
+    walk(new URL("../src/", import.meta.url).pathname);
+    expect(stray).toEqual([]);
+  });
+});
+
 describe("核心層不依賴 THREE 與 DOM", () => {
   it("至少掃到預期數量的檔案（避免路徑錯誤讓測試空轉）", () => {
     expect(coreFiles.length).toBeGreaterThanOrEqual(4);

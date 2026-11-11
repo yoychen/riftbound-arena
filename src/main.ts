@@ -35,7 +35,13 @@ import { session } from "./ui/session.js";
 import { bindInput, input, refreshAim } from "./input/index.js";
 import { buildSkills, updateHud } from "./ui/hud.js";
 import { createScreens } from "./ui/screens.js";
-import { disposeModel, unitModel, worldEntities, zoneMesh } from "./render/models.js";
+import {
+  disposeModel,
+  modelOf,
+  unitModel,
+  worldEntities,
+  zoneMesh,
+} from "./render/models.js";
 import { clearEffects, playBurst, playRing, stepEffects } from "./render/effects.js";
 import {
   clearFloaters,
@@ -50,6 +56,9 @@ import { HEROES } from "./data/heroes.js";
 import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
 import { clamp, clock, dist, rand } from "./core/vec.js";
 import { createNavigation } from "./core/navigation.js";
+import type { GameEvent, Waveform } from "./core/events.js";
+import type { Point } from "./core/vec.js";
+import type { Entity } from "./core/world.js";
 import { createWorld } from "./core/world.js";
 import { createUnit } from "./core/entities.js";
 import { enemies, targetFor } from "./core/targeting.js";
@@ -72,18 +81,23 @@ const coarse = input.coarse;
  * 佇列本身掛在 world 上，核心層的戰鬥邏輯也往同一條管線送。
  */
 const events = world.events;
-const ringFx = (x, z, r, color, life = 0.45) =>
+const ringFx = (x: number, z: number, r: number, color: number, life = 0.45) =>
   events.emit({ type: "ring", x, z, r, color, life });
-const burst = (x, z, color, count = 10) =>
+const burst = (x: number, z: number, color: number, count = 10) =>
   events.emit({ type: "burst", x, z, color, count });
-const damageNumber = (x, z, text, color) =>
+const damageNumber = (x: number, z: number, text: number, color: string) =>
   events.emit({ type: "damage", x, z, text, color });
-const announce = (text) => events.emit({ type: "announce", text });
-const feed = (text) => events.emit({ type: "feed", text });
-const tone = (freq = 400, duration = 0.06, volume = 0.025, wave = "sine") =>
+const announce = (text: string) => events.emit({ type: "announce", text });
+const feed = (text: string) => events.emit({ type: "feed", text });
+const tone = (
+  freq = 400,
+  duration = 0.06,
+  volume = 0.025,
+  wave: Waveform = "sine",
+) =>
   events.emit({ type: "sound", freq, duration, volume, wave });
 
-function handleEvent(event) {
+function handleEvent(event: GameEvent) {
   switch (event.type) {
     case "ring":
       return playRing(event.x, event.z, event.r, event.color, event.life);
@@ -105,11 +119,18 @@ function handleEvent(event) {
   }
 }
 
-function addUnit(type, team, x, z, hero = 0, lane = 0) {
+function addUnit(
+  type: Entity["type"],
+  team: number,
+  x: number,
+  z: number,
+  hero = 0,
+  lane = 0,
+) {
   const e = createUnit(world, type, team, x, z, hero, lane);
   e.model = unitModel(type, team, hero);
-  e.model.position.set(x, 0, z);
-  worldEntities.add(e.model);
+  modelOf(e).position.set(x, 0, z);
+  worldEntities.add(modelOf(e));
   return e;
 }
 /**
@@ -121,13 +142,13 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
 function clearBattle() {
   for (const e of [...world.entities, ...world.projectiles])
     if (e.model) {
-      scene.remove(e.model);
-      worldEntities.remove(e.model);
+      scene.remove(modelOf(e));
+      worldEntities.remove(modelOf(e));
       disposeModel(e.model);
     }
   for (const z of world.zones)
     if (z.model) {
-      scene.remove(z.model);
+      scene.remove(modelOf(z));
       // 區域圓盤的材質是自己 new 的，不是共用快取。
       disposeModel(z.model, true);
     }
@@ -137,7 +158,7 @@ function clearBattle() {
   clearEffects();
   clearFloaters();
 }
-function setupBattle(hero) {
+function setupBattle(hero: number) {
   world.movePath = [];
   events.clear();
   clearBattle();
@@ -192,8 +213,8 @@ const field = {
   navigation,
   bases,
   bounds: { x: 44, z: 36 },
-  pointOnLane: (lane, t) => curves[lane].getPoint(t),
-  progressOn: (lane, point) => {
+  pointOnLane: (lane: number, t: number) => curves[lane].getPoint(t),
+  progressOn: (lane: number, point: Point) => {
     let best = Infinity,
       progress = 0;
     lanePoints[lane].forEach((p, i) => {
@@ -207,14 +228,14 @@ const field = {
   },
 };
 
-function setMoveDestination(x, z) {
-  if (session.state !== "playing" || world.player.hp <= 0) return;
+function setMoveDestination(x: number, z: number) {
+  const player = world.player;
+  if (session.state !== "playing" || !player || player.hp <= 0) return;
   const destination = { x: clamp(x, -43.5, 43.5), z: clamp(z, -35.5, 35.5) };
-  world.movePath = planPath(world.player, destination);
-  if (world.movePath.length) {
-    const end = world.movePath.at(-1);
-    ringFx(end.x, end.z, 0.85, 0xf2dfa1, 0.65);
-  } else announce("這個位置無法抵達，請點選附近空地。");
+  world.movePath = planPath(player, destination);
+  const end = world.movePath.at(-1);
+  if (end) ringFx(end.x, end.z, 0.85, 0xf2dfa1, 0.65);
+  else announce("這個位置無法抵達，請點選附近空地。");
 }
 
 /** 清空輸入狀態，避免覆蓋層關閉後角色還在移動或連打。 */
@@ -240,8 +261,8 @@ const {
   endGame,
 } = screens;
 
-function playerCast(slot) {
-  if (session.state !== "playing") return;
+function playerCast(slot: number) {
+  if (session.state !== "playing" || !world.player) return;
   cast(world, field, world.player, slot);
 }
 function command(x = input.aim.x, z = input.aim.z) {
@@ -267,10 +288,10 @@ function spawnWave() {
         u.progress = team === 0 ? i * 0.008 : 1 - i * 0.008;
       }
 }
-function nearestProgress(e) {
+function nearestProgress(e: Entity) {
   return field.progressOn(e.lane, e);
 }
-function claimBoss(team, lane) {
+function claimBoss(team: number, lane: number) {
   if (!world.boss) return;
   world.boss.hp = world.boss.maxHp = 2700;
   world.boss.team = team;
@@ -284,7 +305,7 @@ function claimBoss(team, lane) {
     `${team === 0 ? "我方" : "敵方"}的熔岩龜前往${lane === 0 ? "上" : "下"}路`,
   );
 }
-function update(dt) {
+function update(dt: number) {
   if (session.state !== "playing") return;
   world.time += dt;
   world.gold += dt * 1.6;
@@ -496,8 +517,8 @@ function update(dt) {
   world.projectiles = world.projectiles.filter((p) => {
     if (p.left <= 0) {
       if (p.model) {
-        scene.remove(p.model);
-        p.model.geometry.dispose();
+        scene.remove(modelOf(p));
+        disposeModel(p.model);
       }
       return false;
     }
@@ -520,9 +541,9 @@ function update(dt) {
   world.zones = world.zones.filter((z) => {
     if (z.life <= 0) {
       if (z.model) {
-        scene.remove(z.model);
-        z.model.geometry.dispose();
-        z.model.material.dispose();
+        scene.remove(modelOf(z));
+        // 區域圓盤的材質是自己 new 的，不是共用快取。
+        disposeModel(z.model, true);
       }
       return false;
     }
@@ -539,8 +560,8 @@ function update(dt) {
   }
   world.entities = world.entities.filter((e) => {
     if (e.hp <= 0 && e.type === "minion") {
-      worldEntities.remove(e.model);
-      e.model.traverse((o) => o.geometry?.dispose());
+      worldEntities.remove(modelOf(e));
+      disposeModel(e.model);
       return false;
     }
     return true;
@@ -556,28 +577,32 @@ function update(dt) {
  * 一律在這裡推導。這道單向性是把遊戲邏輯與 THREE 分開的前提：邏輯不再需要
  * 持有 Object3D，也就能在沒有 WebGL 的環境裡執行與測試。
  */
-function syncModels(dt) {
+/** 區域圓盤是單一網格，不是群組。 */
+const zoneDisc = (z: { model?: unknown }) => z.model as THREE.Mesh;
+
+function syncModels(dt: number) {
   // 模擬只描述投射物與區域的位置與外觀參數，模型在這裡按需建立。
   for (const p of world.projectiles) {
     if (!p.model)
       p.model = sphere(p.big ? 0.34 : 0.18, p.color, p.x, 1.15, p.z, scene);
-    p.model.position.set(p.x, 1.1, p.z);
+    modelOf(p).position.set(p.x, 1.1, p.z);
   }
   for (const z of world.zones) {
     if (!z.model) z.model = zoneMesh(z.x, z.z, z.r, z.color);
-    z.model.material.opacity = z.tick > 0 ? 0.12 : 0.35;
+    (zoneDisc(z).material as THREE.Material).opacity =
+      z.tick > 0 ? 0.12 : 0.35;
   }
   for (const e of world.entities) {
-    e.model.visible = e.hp > 0;
+    modelOf(e).visible = e.hp > 0;
     if (e.hp <= 0) continue;
     const bob =
       (e.type === "hero" || e.type === "minion") && e.moving
         ? Math.abs(Math.sin(world.time * 14 + e.id)) * 0.13
         : 0;
-    e.model.position.set(e.x, bob, e.z);
-    e.model.rotation.y = e.facing;
-    e.model.scale.setScalar(e.hit > 0 ? 1.045 : 1);
-    const crystal = e.model.userData.crystal;
+    modelOf(e).position.set(e.x, bob, e.z);
+    modelOf(e).rotation.y = e.facing;
+    modelOf(e).scale.setScalar(e.hit > 0 ? 1.045 : 1);
+    const crystal = modelOf(e).userData.crystal as THREE.Object3D | undefined;
     if (crystal) {
       crystal.rotation.y = world.time * 0.6;
       crystal.position.y +=
@@ -597,7 +622,7 @@ const aimRing = new THREE.Mesh(
 );
 aimRing.rotation.x = -Math.PI / 2;
 scene.add(aimRing);
-function frame(now) {
+function frame(now: number) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - last) / 1000, 0.045);
   last = now;
@@ -625,7 +650,7 @@ function frame(now) {
     session.state === "playing" &&
     input.pointerKnown &&
     !input.coarse &&
-    world.player?.hp > 0;
+    (world.player?.hp ?? 0) > 0;
   aimRing.position.set(input.aim.x, 0.17, input.aim.z);
   renderer.render(scene, camera);
   drawLabels(world, session.state);
@@ -648,7 +673,17 @@ bindInput({
 
 startScreen();
 requestAnimationFrame(frame);
-if (document.modelContext?.registerTool) {
+/**
+ * 頁面可以向宿主註冊工具（例如在支援的瀏覽器裡讓助理讀取戰況）。
+ * 這是實驗性 API，型別還不在 lib.dom 裡。
+ */
+interface ModelContextHost {
+  registerTool?: (tool: unknown, options?: { signal?: AbortSignal }) => unknown;
+}
+const modelContext = (document as Document & { modelContext?: ModelContextHost })
+  .modelContext;
+
+if (modelContext?.registerTool) {
   const life = new AbortController();
   const tools = [
     {
@@ -684,13 +719,13 @@ if (document.modelContext?.registerTool) {
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false },
-      execute: (input) => startGame(input?.hero),
+      execute: (input?: { hero?: number }) => startGame(input?.hero ?? 0),
     },
   ];
   for (const tool of tools)
     try {
       Promise.resolve(
-        document.modelContext.registerTool(tool, { signal: life.signal }),
+        modelContext.registerTool!(tool, { signal: life.signal }),
       ).catch(() => {});
     } catch {}
   window.addEventListener("pagehide", () => life.abort(), { once: true });

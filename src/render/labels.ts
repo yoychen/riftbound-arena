@@ -3,19 +3,36 @@
  *
  * 用 canvas 而非 DOM，因為要跟著世界座標每幀重畫幾十個標籤。
  */
+import type { World } from "../core/world.js";
 import { HEROES } from "../data/heroes.js";
 import { clamp } from "../core/vec.js";
 import { labelCtx as ctx, screen, W, H } from "./renderer.js";
 
-let floaters = [];
+/** 跳出的傷害數字。生命週期由呈現層保管，模擬只送出事件。 */
+interface Floater {
+  x: number;
+  z: number;
+  /** 世界座標的高度，隨壽命上飄。 */
+  y: number;
+  text: number;
+  life: number;
+  color: string;
+}
+
+let floaters: Floater[] = [];
 
 /** 傷害數字由呈現層自行保管生命週期，模擬只負責說「這裡跳一個數字」。 */
-function showDamageNumber(x, z, text, color) {
+function showDamageNumber(
+  x: number,
+  z: number,
+  text: number,
+  color: string,
+) {
   floaters.push({ x, z, y: 2.8, text, life: 0.8, color });
 }
 
 /** 依 dt 推進傷害數字並回收過期的。 */
-export function stepFloaters(dt, animate) {
+export function stepFloaters(dt: number, animate: boolean) {
   if (animate) floaters.forEach((f) => (f.life -= dt));
   floaters = floaters.filter((f) => f.life > 0);
 }
@@ -25,7 +42,7 @@ export function clearFloaters() {
   floaters = [];
 }
 
-export function drawLabels(world, state) {
+export function drawLabels(world: World, state: string) {
   ctx.clearRect(0, 0, W, H);
   if (state === "select") return;
   for (const e of world.entities) {
@@ -92,8 +109,9 @@ export function drawLabels(world, state) {
     ctx.fillStyle = f.color;
     ctx.strokeStyle = "#24352a";
     ctx.lineWidth = 2;
-    ctx.strokeText(f.text, p.x, p.y);
-    ctx.fillText(f.text, p.x, p.y);
+    const text = String(f.text);
+    ctx.strokeText(text, p.x, p.y);
+    ctx.fillText(text, p.x, p.y);
   }
   ctx.globalAlpha = 1;
   if (world.ping && world.time < world.ping.until) {
