@@ -48,6 +48,9 @@ export function damage(
   skill = false,
 ): void {
   if (target.hp <= 0) return;
+  // 無敵要在最前面判：閃避或復活保護期間，這一擊完全不存在 ——
+  // 不減傷、不反傷、不上緩速、不觸發任何特效。
+  if ((target.invuln as number) > 0) return;
   if (target.type === "core" && coreIsShielded(world, target)) return;
 
   let n = amount;
@@ -68,10 +71,6 @@ export function damage(
       });
     }
   }
-  // 既知缺陷（docs/refactor-plan.md #2）：這道判斷應該在最前面。
-  // 目前對閃避中的目標攻擊，傷害會被取消，但上面的反傷已經先生效了。
-  if ((target.invuln as number) > 0) return;
-
   if (source) {
     const mods = source.mods as Record<string, number | boolean | undefined>;
     n *= 1 + ((mods.power as number) || 0);

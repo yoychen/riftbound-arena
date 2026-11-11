@@ -6,6 +6,7 @@
  * THREE 的存在，測試也能餵進自己的幾何佈局。
  */
 
+import { createObstacleGrid } from "./obstacleGrid.js";
 import { clamp, dist, type Point } from "./vec.js";
 
 export interface Obstacle extends Point {
@@ -28,12 +29,20 @@ export interface NavigationOptions {
 export interface Navigation {
   /** a 到 b 的直線是否不被任何障礙物擋住。 */
   walkableSegment(a: Point, b: Point): boolean;
+  /** 可能與該圓相交的障礙物。移動時的推擠用，避免每次都掃全圖。 */
+  obstaclesNear(x: number, z: number, radius: number): readonly Obstacle[];
   /**
    * 規劃 from 到 to 的路徑，回傳要依序經過的轉折點。
    * 無法抵達時回傳空陣列。
    */
   planPath(from: Point, to: Point): Point[];
 }
+
+/**
+ * 連通區域小於這個格數就視為封死的口袋。開闊地帶有數千格，
+ * 被障礙物圍起來的坑通常只有個位數。
+ */
+const ENCLOSED_LIMIT = 40;
 
 export const DEFAULTS: Required<NavigationOptions> = {
   step: 1.5,
@@ -53,6 +62,7 @@ export function createNavigation(
     ...options,
   };
   const nodeCount = cols * rows;
+  const grid = createObstacleGrid(obstacles, clearance);
 
   const id = (x: number, z: number) => z * cols + x;
   const point = (n: number): Point => ({
@@ -64,7 +74,8 @@ export function createNavigation(
     const dx = b.x - a.x;
     const dz = b.z - a.z;
     const lengthSquared = dx * dx + dz * dz;
-    return !obstacles.some((o) => {
+    // 只檢查線段經過的格子裡的障礙物，而不是全圖。
+    return !grid.alongSegment(a, b).some((o) => {
       const t = lengthSquared
         ? clamp(((o.x - a.x) * dx + (o.z - a.z) * dz) / lengthSquared, 0, 1)
         : 0;
@@ -85,9 +96,9 @@ export function createNavigation(
       passable = new Uint8Array(nodeCount);
       for (let n = 0; n < nodeCount; n++) {
         const p = point(n);
-        passable[n] = obstacles.some(
-          (o) => Math.hypot(o.x - p.x, o.z - p.z) < o.r + clearance,
-        )
+        passable[n] = grid
+          .near(p.x, p.z, 0)
+          .some((o) => Math.hypot(o.x - p.x, o.z - p.z) < o.r + clearance)
           ? 0
           : 1;
       }
@@ -110,6 +121,35 @@ export function createNavigation(
       }
     }
     return best;
+  }
+
+  /**
+   * 從某個格點往外走，最多數到 limit 個連通格點。
+   *
+   * 用來區分兩種 A* 失敗：終點真的被圍死（區域很小），
+   * 或只是起點卡在連不出去的縫隙裡（終點其實通向整張地圖）。
+   */
+  function regionSize(from: number, limit: number): number {
+    const seen = new Set([from]);
+    const queue = [from];
+    while (queue.length && seen.size < limit) {
+      const current = queue.shift()!;
+      const x = current % cols;
+      const z = Math.floor(current / cols);
+      for (let dx = -1; dx <= 1; dx++)
+        for (let dz = -1; dz <= 1; dz++) {
+          if (!dx && !dz) continue;
+          if (x + dx < 0 || x + dx >= cols || z + dz < 0 || z + dz >= rows)
+            continue;
+          const next = id(x + dx, z + dz);
+          if (seen.has(next)) continue;
+          if (!valid(next) || !walkableSegment(point(current), point(next)))
+            continue;
+          seen.add(next);
+          queue.push(next);
+        }
+    }
+    return seen.size;
   }
 
   function search(start: number, goal: number): number[] | null {
@@ -164,6 +204,10 @@ export function createNavigation(
   /**
    * 把逐格路徑收斂成最少轉折的折線：從目前的錨點往後找最遠一個仍在視線內
    * 的節點，跳過中間所有節點，如此反覆。
+   *
+   * 起點若卡在障礙物內部，從那裡看不見任何節點，平滑就進行不下去。
+   * 這時退回未平滑的逐格路徑，而不是宣告無路可走 —— 對玩家來說，
+   * 走得醜總比右鍵完全沒反應好。
    */
   function smooth(from: Point, nodes: Point[]): Point[] {
     const result: Point[] = [];
@@ -173,7 +217,11 @@ export function createNavigation(
       let furthest = -1;
       for (let i = 0; i < remaining.length; i++)
         if (walkableSegment(anchor, remaining[i])) furthest = i;
-      if (furthest < 0) return [];
+      if (furthest < 0) {
+        // 從錨點看不見任何節點。第一步就失敗代表起點被困住，
+        // 整條逐格路徑原樣送出；中途失敗則保留已收斂的部分再接上剩下的。
+        return [...result, ...remaining];
+      }
       anchor = remaining[furthest];
       result.push(anchor);
       remaining = remaining.slice(furthest + 1);
@@ -197,12 +245,30 @@ export function createNavigation(
     if (start < 0 || goal < 0) return [];
 
     const path = search(start, goal);
-    if (!path) return [];
+    if (!path) {
+      /**
+       * A* 連不起來有兩種可能，處置完全不同。
+       *
+       * 規劃用的間隙（0.55）比移動用的（0.48）大，路徑才不會貼著樹角走。
+       * 代價是角色擠得進去的縫隙在格點圖上是封死的 —— 起點因此可能落在一個
+       * 連不出去的口袋裡，而終點其實通向整張地圖。這時直接朝終點走，讓移動
+       * 的碰撞滑移把人帶出來，正是玩家改用 WASD 會做的事。
+       *
+       * 但若終點自己被圍死，就該老實回報走不到。用有界的連通區域大小區分：
+       * 圍死的口袋只有幾格，開闊地帶一下就數滿。
+       */
+      const goalIsEnclosed = regionSize(goal, ENCLOSED_LIMIT) < ENCLOSED_LIMIT;
+      return goalIsEnclosed ? [] : [{ ...to }];
+    }
 
     const nodes = path.map(point);
     if (walkableSegment(nodes[nodes.length - 1], to)) nodes.push({ ...to });
     return smooth(from, nodes);
   }
 
-  return { walkableSegment, planPath };
+  return {
+    walkableSegment,
+    planPath,
+    obstaclesNear: (x, z, radius) => grid.near(x, z, radius),
+  };
 }

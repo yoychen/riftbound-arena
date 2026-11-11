@@ -11,7 +11,7 @@ import type { Battlefield } from "./battlefield.js";
 import { addZone, damage, shoot } from "./combat.js";
 import { move } from "./movement.js";
 import { attack, cast } from "./skills.js";
-import { enemies, targetFor } from "./targeting.js";
+import { countEnemies, targetFor } from "./targeting.js";
 import { clamp, dist, type Point } from "./vec.js";
 import type { Entity, World } from "./world.js";
 
@@ -141,7 +141,7 @@ function fightAsHero(
   const worthSkills =
     target.type === "hero" ||
     target.type === "boss" ||
-    enemies(world, entity, 8).length > 2;
+    countEnemies(world, entity, 8) > 2;
   if (worthSkills) {
     const cd = entity.cd as number[];
     if (cd[0] <= 0) cast(world, field, entity, 0);

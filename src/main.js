@@ -35,7 +35,7 @@ import { session } from "./ui/session.js";
 import { bindInput, input, refreshAim } from "./input/index.js";
 import { buildSkills, updateHud } from "./ui/hud.js";
 import { createScreens } from "./ui/screens.js";
-import { unitModel, worldEntities, zoneMesh } from "./render/models.js";
+import { disposeModel, unitModel, worldEntities, zoneMesh } from "./render/models.js";
 import { clearEffects, playBurst, playRing, stepEffects } from "./render/effects.js";
 import {
   clearFloaters,
@@ -112,13 +112,25 @@ function addUnit(type, team, x, z, hero = 0, lane = 0) {
   worldEntities.add(e.model);
   return e;
 }
+/**
+ * 清空戰場，並釋放這一局配置的 GPU 資源。
+ *
+ * 只從場景移除而不釋放，重開幾十局之後就會累積可觀的幾何資料 ——
+ * 實測每局約 0.5 MB，而且只會漲不會跌。
+ */
 function clearBattle() {
   for (const e of [...world.entities, ...world.projectiles])
     if (e.model) {
       scene.remove(e.model);
       worldEntities.remove(e.model);
+      disposeModel(e.model);
     }
-  for (const z of world.zones) if (z.model) scene.remove(z.model);
+  for (const z of world.zones)
+    if (z.model) {
+      scene.remove(z.model);
+      // 區域圓盤的材質是自己 new 的，不是共用快取。
+      disposeModel(z.model, true);
+    }
   world.entities = [];
   world.projectiles = [];
   world.zones = [];

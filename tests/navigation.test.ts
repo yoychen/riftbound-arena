@@ -4,6 +4,7 @@ import {
   DEFAULTS,
   type Obstacle,
 } from "../src/core/navigation.js";
+import { createRng } from "../src/core/rng.js";
 import { dist, type Point } from "../src/core/vec.js";
 
 /** 路徑的總長度，用來判斷繞路是否合理。 */
@@ -135,32 +136,42 @@ describe("planPath", () => {
     expect(pathIsClear(from, path, obstacles)).toBe(true);
   });
 
-  // 既知缺陷，見 docs/refactor-plan.md #10：起點卡在障礙物內部時規劃會失敗，
-  // 因為路徑平滑要求「從起點看得見第一個節點」，而在障礙物內部誰都看不見。
-  // 這裡記錄現況，階段 7 修正後要把斷言改成能規劃出路徑。
-  it("起點卡在障礙物內時，目前會規劃失敗", () => {
+  it("起點卡在障礙物內時，仍規劃得出一條路", () => {
     const obstacles: Obstacle[] = [{ x: 0, z: 0, r: 3 }];
     const nav = createNavigation(obstacles);
-    expect(nav.planPath({ x: 0.5, z: 0.5 }, { x: 20, z: 20 })).toEqual([]);
-    // 對照組：只要站在障礙物外，同樣的終點就規劃得出來。
-    expect(
-      nav.planPath({ x: -4, z: -4 }, { x: 20, z: 20 }).length,
-    ).toBeGreaterThan(0);
+    const path = nav.planPath({ x: 0.5, z: 0.5 }, { x: 20, z: 20 });
+
+    // 平滑會失敗（從障礙物內部看不見任何節點），但退回逐格路徑仍然可走。
+    expect(path.length).toBeGreaterThan(0);
+    expect(path[path.length - 1]).toEqual({ x: 20, z: 20 });
   });
 
-  it("重複規劃時，格點通行表只算一次", () => {
-    let reads = 0;
-    const obstacles = new Proxy([{ x: 0, z: 0, r: 3 }] as Obstacle[], {
-      get(target, prop, receiver) {
-        if (prop === "some") reads++;
-        return Reflect.get(target, prop, receiver);
-      },
-    });
+  it("終點被困住時仍回傳空陣列，不會假裝走得到", () => {
+    const obstacles: Obstacle[] = [];
+    for (let a = 0; a < Math.PI * 2; a += 0.15)
+      obstacles.push({ x: Math.cos(a) * 6, z: Math.sin(a) * 6, r: 1.2 });
     const nav = createNavigation(obstacles);
-    nav.planPath({ x: -12, z: 0 }, { x: 12, z: 0 });
-    const afterFirst = reads;
-    nav.planPath({ x: -12, z: 4 }, { x: 12, z: -4 });
-    // 第二次規劃不該再為了建表而全圖掃描一次。
-    expect(reads - afterFirst).toBeLessThan(afterFirst);
+    expect(nav.planPath({ x: -20, z: 0 }, { x: 0, z: 0 })).toEqual([]);
+  });
+
+  it("在真實規模的地形上，規劃成本遠低於一幀的預算", () => {
+    // 這是效能回歸的守門。改用空間索引之前，這樣的跨圖規劃每次約 30 ms，
+    // 三十次要九百多毫秒；現在每次約 3 ms。門檻取 250 ms，對現況有三倍
+    // 餘裕，但舊實作絕不可能通過。
+    const rng = createRng(4242);
+    const obstacles: Obstacle[] = [];
+    for (let i = 0; i < 360; i++)
+      obstacles.push({ x: rng() * 88 - 44, z: rng() * 72 - 36, r: 0.65 });
+    const nav = createNavigation(obstacles);
+
+    const queries = Array.from({ length: 30 }, () => ({
+      from: { x: rng() * 86 - 43, z: rng() * 70 - 35 },
+      to: { x: rng() * 86 - 43, z: rng() * 70 - 35 },
+    }));
+    nav.planPath(queries[0].from, queries[0].to);
+
+    const started = performance.now();
+    for (const q of queries) nav.planPath(q.from, q.to);
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });

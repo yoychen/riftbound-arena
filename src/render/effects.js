@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { clamp } from "../core/vec.js";
 import { mesh, scene, sphere } from "./renderer.js";
+import { disposeModel } from "./models.js";
 import { rand } from "../core/vec.js";
 
 let effects = [];
@@ -79,9 +80,13 @@ export function stepEffects(dt, animate) {
   });
 }
 
-/** 換局時把還在場上的特效清掉。 */
+/** 換局時把還在場上的特效清掉，連同它們的 GPU 資源。 */
 export function clearEffects() {
-  for (const e of effects) scene.remove(e.model);
+  for (const e of effects) {
+    scene.remove(e.model);
+    // 光環自己 new 了材質，粒子用的是共用快取，不能釋放。
+    disposeModel(e.model, e.expand);
+  }
   effects = [];
 }
 
