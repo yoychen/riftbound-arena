@@ -29,8 +29,20 @@ export async function loadModel(url: string): Promise<THREE.Object3D> {
 export async function loadAnimatedModel(
   url: string,
 ): Promise<{ scene: THREE.Object3D; animations: THREE.AnimationClip[] }> {
-  const gltf = await loader.loadAsync(url);
+  const gltf = url.startsWith("data:")
+    ? await loader.parseAsync(decodeDataUrl(url), "")
+    : await loader.loadAsync(url);
   return { scene: gltf.scene, animations: gltf.animations };
+}
+
+/**
+ * 小於 Vite 內嵌門檻的模型（或整包內嵌的靜態輸出）會變成 data: URL。
+ * 直接解碼，不經過 fetch —— 有些嵌入環境的安全政策不允許 fetch data: URL。
+ */
+function decodeDataUrl(url: string): ArrayBuffer {
+  const base64 = url.slice(url.indexOf(",") + 1);
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return bytes.buffer;
 }
 
 export function findGeometry(root: THREE.Object3D, name: string): THREE.BufferGeometry {
