@@ -235,8 +235,12 @@ def render_preview(path, tints, size=360):
     sun.rotation_euler = (math.radians(40), 0, math.radians(-30))
     scene.collection.objects.link(sun)
 
-    # 角色朝向遊戲的 +Z，也就是 Blender 的 -Y。
-    target = Vector((0, 0, 1.25))
+    # 依模型實際大小取景。角色朝向遊戲的 +Z，也就是 Blender 的 -Y。
+    corners = [o.matrix_world @ Vector(c) for o in scene.objects if o.type == "MESH" for c in o.bound_box]
+    lo = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
+    hi = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+    target = Vector((0, 0, (lo.z + hi.z) / 2))
+    frame = max(hi.z - lo.z, hi.x - lo.x, hi.y - lo.y) * 1.12
     views = [
         ("front", 0, 8, False),
         ("3/4", 40, 12, False),
@@ -255,10 +259,10 @@ def render_preview(path, tints, size=360):
         cam.location = target + offset
         cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
         if persp:
-            cam.data.lens = 420  # 遠處長焦：近似遊戲裡從高處往下看的樣子
+            cam.data.lens = 420 * 3.4 / frame  # 遠處長焦：近似遊戲裡從高處往下看的樣子
         else:
             cam.data.type = "ORTHO"
-            cam.data.ortho_scale = 3.4
+            cam.data.ortho_scale = frame
         scene.camera = cam
         scene.render.filepath = tmp
         bpy.ops.render.render(write_still=True)

@@ -10,41 +10,99 @@ import { teamColors } from "./terrain.js";
 import { box, cyl, mesh, scene, sphere } from "./renderer.js";
 import { loadModel, shadedMaterial } from "./instancing.js";
 import swordsmanUrl from "../assets/models/hero_swordsman.glb?url";
+import archerUrl from "../assets/models/hero_archer.glb?url";
+import mageUrl from "../assets/models/hero_mage.glb?url";
+import fighterUrl from "../assets/models/hero_fighter.glb?url";
 
 const worldEntities = new THREE.Group();
 scene.add(worldEntities);
 
+const SKIN = 0xe4c9a0;
+const PANTS = 0x294343;
+const BOOTS = 0x5a4636;
+
+interface HeroModel {
+  url: string;
+  /** .glb 裡的物件名稱 → 色相。模型只帶明暗。 */
+  colors: Record<string, number>;
+  /** 會自己發光的部位（法球）。 */
+  glow?: string[];
+}
+
 /**
- * Blender 建的英雄模型（art/build_hero_swordsman.py 等）。
- *
- * 模型只帶明暗，各部位的色相在這裡 —— key 是 .glb 裡的物件名稱。
- * 還沒有 Blender 模型的英雄繼續用下面 unitModel 裡程式拼出來的版本。
+ * Blender 建的英雄模型（art/build_hero_*.py），索引與 HEROES 相同。
+ * 調色盤集中在這裡；各腳本裡的 PREVIEW_TINTS 只是渲染預覽圖用的副本。
  */
-const HERO_MODELS: Record<number, { url: string; colors: Record<string, number> }> = {
-  0: {
+const HERO_MODELS: HeroModel[] = [
+  {
     url: swordsmanUrl,
     colors: {
       Coat: HEROES[0].color,
-      Skin: 0xe4c9a0,
-      Dark: 0x294343,
-      Boots: 0x5a4636,
+      Skin: SKIN,
+      Dark: PANTS,
+      Boots: BOOTS,
       Hair: 0x324e4c,
       Scarf: 0xeef3ea,
       Blade: 0xdbede3,
       Gold: 0xcbb477,
     },
   },
-};
+  {
+    url: archerUrl,
+    colors: {
+      Tunic: HEROES[1].color,
+      Skin: SKIN,
+      Dark: PANTS,
+      Boots: BOOTS,
+      Hair: 0x8a4b2f,
+      Cloak: 0x3c6650,
+      Leather: 0x7a5236,
+      Bow: 0xe6bc66,
+      String: 0xf0e0b3,
+      Star: 0xfff1b8,
+    },
+  },
+  {
+    url: mageUrl,
+    colors: {
+      Robe: HEROES[2].color,
+      Trim: 0x7d65ab,
+      Skin: SKIN,
+      Dark: PANTS,
+      Hair: 0xdcd6ec,
+      Sash: 0xe0c27a,
+      Shoes: 0x3d3350,
+      Staff: 0xc5b58d,
+      Orb: 0xbea0fc,
+      Moon: 0xf2dc9b,
+    },
+    glow: ["Orb"],
+  },
+  {
+    url: fighterUrl,
+    colors: {
+      Armor: HEROES[3].color,
+      Plate: 0x859890,
+      Stone: 0x9a9282,
+      Skin: SKIN,
+      Dark: PANTS,
+      Boots: BOOTS,
+      Beard: 0x8a5a3a,
+      Shield: 0xc8ac70,
+      Wood: 0x6e6655,
+    },
+  },
+];
 
 /**
  * 已載入的英雄模型。每個英雄只載入一次，場上的每個單位都 clone 一份 ——
  * clone 共用幾何與材質，所以 disposeModel 要跳過標了 `shared` 的網格。
  *
  * 載入是非同步的，unitModel 卻得同步回傳；模型通常在選完英雄前就載好了，
- * 萬一還沒好，那一隻就先用程式拼出來的版本。
+ * 萬一還沒好（或載入失敗），那一隻就先用 unitModel 裡程式拼出來的版本。
  */
 const loadedHeroes = new Map<number, THREE.Object3D>();
-for (const [hero, { url, colors }] of Object.entries(HERO_MODELS)) {
+HERO_MODELS.forEach(({ url, colors, glow = [] }, hero) => {
   loadModel(url)
     .then((model) => {
       model.traverse((o) => {
@@ -52,17 +110,22 @@ for (const [hero, { url, colors }] of Object.entries(HERO_MODELS)) {
         if (!part.isMesh) return;
         const color = colors[part.name];
         if (color === undefined) throw new Error(`英雄模型的 ${part.name} 沒有對應的顏色`);
-        part.material = shadedMaterial(color);
+        const material = shadedMaterial(color);
+        if (glow.includes(part.name)) {
+          material.emissive.setHex(color);
+          material.emissiveIntensity = 0.7;
+        }
+        part.material = material;
         part.castShadow = true;
         part.receiveShadow = true;
         part.userData.shared = true;
       });
-      loadedHeroes.set(Number(hero), model);
+      loadedHeroes.set(hero, model);
     })
     .catch((error) => {
       console.error(`英雄 ${hero} 的模型載入失敗，改用程式生成的模型`, error);
     });
-}
+});
 
 function unitModel(type: string, team: number, hero = 0): THREE.Group {
   const root = new THREE.Group();
