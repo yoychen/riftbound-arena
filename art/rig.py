@@ -275,44 +275,111 @@ def idle(arm, frames=60):
     return loop(arm, "Idle", frames, pose)
 
 
-def walk(arm, hip_y, frames=12, stride=48, arm_swing=(30, 30), lean=10):
+def _smooth(t):
+    return t * t * (3 - 2 * t)
+
+
+def walk(arm, joints, frames=16, stride=38, duty=0.17, arm_swing=(0.5, 0.9), lean=12):
     """
-    跑步循環。hip_y 是髖關節離地的高度，用來算腳往後蹬的速度。
+    有騰空期的跑步循環。
 
-    腳要「踩住」地面不打滑，踩地那隻腳往後移動的速度得等於身體前進的速度。
-    這裡算出這個速度存在骨架上（`walk_speed`，匯出成 glTF extras），遊戲依角色
-    實際的移動速度調整播放速度，兩者就對得上。
+    腿短的角色要跑得快，如果整個循環都有一隻腳貼地，只能靠很高的步頻（看起來像
+    碎步）。真實的跑步每隻腳只有一小段時間踩地，其餘時間雙腳騰空，一步可以跨得
+    比腿的擺幅遠。這裡照這個節奏做：
 
-    - 踩地的腳從前擺到後的距離約 2 · hip_y · sin(stride)，花半個循環。
-    - 腿張開時腳會離地，所以臀部跟著降低 hip_y · (1 − cos θ)，讓腳碰得到地。
-    - arm_swing 是 (右手, 左手) 的擺幅，拿著武器的手可以擺小一點。
+    - 每隻腳在一個循環裡踩地 duty 的時間。踩地時腳從大腿往前張 stride 度的位置
+      等速掃到往後張 stride 度的位置：這段速度就是身體的速度，腳不會打滑。
+      腳步跨多遠由騰空期決定，所以 stride 不必很大，臀部也不會因為腿張太開而
+      掉得太低。
+    - 其餘時間腳離地往前收：膝蓋先往後彎、往上帶，落地前再伸直。
+    - 每一格依大腿、小腿長度（取自 joints）解出髖與膝的角度，讓踩地的腳底剛好
+      碰到地面；臀部高度跟著變，騰空時走一道小拋物線。
+    - 腳掌保持平貼地面。
+
+    腳往後掃的速度（掃動距離 / 踩地時間）存在骨架的 `walk_speed`（匯出成 glTF
+    extras），遊戲依角色實際的移動速度調整播放速度。arm_swing 是 (右手, 左手)
+    相對腿的擺幅比例，拿著武器的手可以擺小一點。
     """
     duration = frames / FPS
-    arm["walk_speed"] = 4 * hip_y * math.sin(math.radians(stride)) / duration
+    hip, knee = Vector(joints["Thigh.L"][0]), Vector(joints["Thigh.L"][1])
+    ankle = Vector(joints["Shin.L"][1])
+    thigh_len, shin_len = (knee - hip).length, (ankle - knee).length
+    sole = ankle.y  # 腳踝離腳底的高度
+    rest_hip_y = hip.y
+    stance_bend = 12
+    reach0 = math.sqrt(thigh_len**2 + shin_len**2 + 2 * thigh_len * shin_len * math.cos(math.radians(stance_bend)))
+    sweep = 2 * reach0 * math.sin(math.radians(stride))
+    arm["walk_speed"] = sweep / (duty * duration)
+
+    def leg_angles(z, bend):
+        """腳踝相對髖關節往前 z 公尺、膝蓋彎 bend 度時，大腿要往前擺幾度，以及髖關節的高度。"""
+        b = math.radians(bend)
+        reach = math.sqrt(thigh_len**2 + shin_len**2 + 2 * thigh_len * shin_len * math.cos(b))
+        line = math.asin(max(-1.0, min(1.0, z / reach)))  # 髖→踝連線偏離垂直的角度
+        thigh = line + math.atan2(shin_len * math.sin(b), thigh_len + shin_len * math.cos(b))
+        return math.degrees(thigh), reach * math.cos(line) + sole
+
+    def leg(u):
+        """
+        一隻腳在相位 u（0..1）的狀態：(大腿往前角度, 膝蓋彎曲角度, 踩地時需要的髖高或 None)。
+        u 在 [0, duty) 踩地，其餘騰空往前收。
+        """
+        if u < duty:
+            t = u / duty
+            z = sweep / 2 - sweep * t
+            bend = stance_bend + 14 * math.sin(math.pi * t)  # 踩地中段膝蓋微彎吸收衝擊
+            thigh, hip_y = leg_angles(z, bend)
+            return thigh, bend, hip_y
+        t = (u - duty) / (1 - duty)
+        back, _ = leg_angles(-sweep / 2, stance_bend)
+        front, _ = leg_angles(sweep / 2, stance_bend)
+        thigh = back + (front - back) * _smooth(t) + 22 * math.sin(math.pi * t) ** 2  # 膝蓋往上帶
+        bend = stance_bend + 95 * math.sin(math.pi * min(1.0, t * 1.15)) ** 1.5  # 先往後彎、落地前伸直
+        return thigh, bend, None
+
+    # 先算一輪臀部高度：踩地時由踩地的腳決定，騰空時在起跳與落地之間走拋物線。
+    samples = 240
+    heights = []
+    for i in range(samples):
+        u = i / samples
+        hl = leg(u)[2]
+        hr = leg((u + 0.5) % 1)[2]
+        heights.append(hl if hl is not None else hr)
+    for i in range(samples):
+        if heights[i] is not None:
+            continue
+        j0 = i
+        while heights[j0 % samples] is None:
+            j0 -= 1
+        j1 = i
+        while heights[j1 % samples] is None:
+            j1 += 1
+        y0, y1 = heights[j0 % samples], heights[j1 % samples]
+        t = (i - j0) / (j1 - j0)
+        heights[i] = y0 + (y1 - y0) * t + 0.03 * math.sin(math.pi * t)
 
     def pose(t):
         p = t * math.tau
-        s, c = math.sin(p), math.cos(p)
-        spread = math.radians(stride * abs(s))
+        tl, bl, _ = leg(t)
+        tr, br, _ = leg((t + 0.5) % 1)
+        hip_y = heights[int(t * samples) % samples]
         return {
-            # 腿張開時降低臀部，踩地的腳才不會懸空
-            "loc": (0, -0.8 * hip_y * (1 - math.cos(spread)), 0),
-            "Hips": rot((Y, 8 * s)),
-            "Spine": rot((X, lean), (Y, -12 * s)),
-            "Head": rot((X, -lean * 0.6), (Y, 4 * s)),
-            # 左腿往前時（s > 0）右腿往後；腿往前收時膝蓋彎得最多，踩地時幾乎打直
-            "Thigh.L": rot((X, -stride * s)),
-            "Thigh.R": rot((X, stride * s)),
-            "Shin.L": rot((X, 8 + 62 * max(0.0, c))),
-            "Shin.R": rot((X, 8 + 62 * max(0.0, -c))),
-            # 腳掌保持大致平貼地面
-            "Foot.L": rot((X, stride * s * 0.6 - 8 * max(0.0, c))),
-            "Foot.R": rot((X, -stride * s * 0.6 - 8 * max(0.0, -c))),
-            # 手和同側的腳反向擺
-            "UpperArm.L": rot((X, arm_swing[1] * s)),
-            "UpperArm.R": rot((X, -arm_swing[0] * s)),
-            "Forearm.L": rot((X, -30)),
-            "Forearm.R": rot((X, -15)),
+            "loc": (0, hip_y - rest_hip_y, 0),
+            "Hips": rot((Y, 8 * math.sin(p))),
+            "Spine": rot((X, lean), (Y, -12 * math.sin(p))),
+            "Head": rot((X, -lean * 0.7), (Y, 4 * math.sin(p))),
+            "Thigh.L": rot((X, -tl)),
+            "Thigh.R": rot((X, -tr)),
+            "Shin.L": rot((X, bl)),
+            "Shin.R": rot((X, br)),
+            # 腳掌平貼地面：抵銷大腿與小腿的轉動
+            "Foot.L": rot((X, tl - bl)),
+            "Foot.R": rot((X, tr - br)),
+            # 手和對側的腳同向擺
+            "UpperArm.L": rot((X, -tr * arm_swing[1])),
+            "UpperArm.R": rot((X, -tl * arm_swing[0])),
+            "Forearm.L": rot((X, -40)),
+            "Forearm.R": rot((X, -20)),
         }
 
     return loop(arm, "Walk", frames, pose, step=1)

@@ -160,7 +160,7 @@ JOINTS = rig.humanoid({"R": SWORD_ARM, "L": FREE_ARM}, leg_joints())
 
 def actions(skeleton):
     idle = rig.idle(skeleton)
-    walk = rig.walk(skeleton, hip_y=0.80, arm_swing=(14, 30))  # 握劍的右手擺小一點
+    walk = rig.walk(skeleton, JOINTS, arm_swing=(0.35, 0.9))  # 握劍的右手擺小一點
     # 普攻：右肩往後收、把劍舉過肩，再從右上往左下斜劈。只動上半身 ——
     # 遊戲裡攻擊時腳照樣跑或站，見 src/render/models.ts 的 HeroAnimator。遊戲裡每 0.48 秒一刀，動作 0.5 秒。
     attack = rig.one_shot(
@@ -189,7 +189,7 @@ def actions(skeleton):
             (15, {}),
         ],
     )
-    return [(idle, [0, 15, 30, 45]), (walk, [0, 3, 6, 9]), (attack, [0, 4, 8, 11])]
+    return [(idle, [0, 15, 30, 45]), (walk, [0, 2, 4, 6, 8, 10, 12, 14]), (attack, [0, 4, 8, 11])]
 
 
 # ── 收尾 ─────────────────────────────────────────────────
