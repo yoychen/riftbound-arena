@@ -146,8 +146,24 @@ function bodyHalf(clip: THREE.AnimationClip, lower: boolean): THREE.AnimationCli
  * 下半身，攻擊時改播 Attack —— 射手邊跑邊射時腳照樣在跑。每組權重加起來都是 1，
  * 混合時才不會被拉回靜止姿勢。
  *
- * 只讀實體的 moving、swing（普攻時設為 0.18、逐格遞減）與位置，不碰模擬。
+ * 角色面向滑鼠，移動方向卻不一定相同：下半身轉向實際移動的方向，往後移動時
+ * 倒退跑（見 steer）。
+ *
+ * 只讀實體的 moving、swing（普攻時設為 0.18、逐格遞減）、位置與 facing，不碰模擬。
  */
+/** 下半身最多相對上半身扭多少。 */
+const LEG_TWIST = THREE.MathUtils.degToRad(75);
+/** 移動方向偏離面向超過這個角度就改成倒退跑，回到 BACKPEDAL_EXIT 以內才恢復。 */
+const BACKPEDAL_ENTER = THREE.MathUtils.degToRad(110);
+const BACKPEDAL_EXIT = THREE.MathUtils.degToRad(70);
+const tmpQuat = new THREE.Quaternion();
+const tmpYaw = new THREE.Quaternion();
+const tmpUp = new THREE.Vector3();
+
+function wrapAngle(a: number): number {
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}
+
 class HeroAnimator {
   private readonly mixer: THREE.AnimationMixer;
   private readonly idle: THREE.AnimationAction[];
@@ -160,6 +176,13 @@ class HeroAnimator {
   private readonly walkSpeed: number;
   private speed = 0;
   private last?: { x: number; z: number };
+  /** 最近一次的移動方向（世界座標的角度，與 facing 同一套）。 */
+  private heading = 0;
+  /** 下半身相對上半身轉了多少（弧度）；上半身反向扭回來，繼續面向 facing。 */
+  private legYaw = 0;
+  private backward = false;
+  private readonly hips?: THREE.Object3D;
+  private readonly spine?: THREE.Object3D;
 
   constructor(root: THREE.Object3D, clips: THREE.AnimationClip[]) {
     this.mixer = new THREE.AnimationMixer(root);
@@ -174,6 +197,8 @@ class HeroAnimator {
       });
     };
     this.walkSpeed = Number(root.getObjectByName("Skeleton")?.userData.walk_speed) || 6;
+    this.hips = root.getObjectByName("Hips");
+    this.spine = root.getObjectByName("Spine");
     this.idle = halves("Idle");
     this.walk = halves("Walk");
     // 每隻英雄的呼吸錯開，站在一起時才不會同步起伏。
@@ -187,16 +212,20 @@ class HeroAnimator {
     this.apply();
   }
 
-  update(moving: boolean, swing: number, dt: number, x: number, z: number) {
+  update(moving: boolean, swing: number, dt: number, x: number, z: number, facing: number) {
     // 依實際移動速度調整跑步的播放速度：腳往後蹬的速度等於身體前進的速度，
     // 踩地的腳才不會在地上滑。閃避、被擊退這類瞬間位移不算，夾在合理範圍內。
     if (this.last && dt > 0) {
-      const v = Math.hypot(x - this.last.x, z - this.last.z) / dt;
+      const dx = x - this.last.x,
+        dz = z - this.last.z;
+      const v = Math.hypot(dx, dz) / dt;
       this.speed += (v - this.speed) * Math.min(1, dt * 10);
+      if (Math.hypot(dx, dz) > 1e-4) this.heading = Math.atan2(dx, dz);
     }
     this.last = { x, z };
+    this.steer(moving, facing, dt);
     const pace = THREE.MathUtils.clamp(this.speed / this.walkSpeed, 0.6, 2);
-    for (const a of this.walk) a.timeScale = pace;
+    for (const a of this.walk) a.timeScale = this.backward ? -pace : pace;
 
     if (this.attack && swing > this.lastSwing + 1e-4) {
       this.attack.reset().play();
@@ -209,6 +238,37 @@ class HeroAnimator {
     this.attackWeight += ((attacking ? 1 : 0) - this.attackWeight) * Math.min(1, dt * 20);
     this.apply();
     this.mixer.update(dt);
+    this.twist();
+  }
+
+  /**
+   * 角色面向滑鼠（facing），移動方向卻可以是任何方向。腳要朝實際前進的方向跑，
+   * 否則往後移動時看起來像倒著滑：
+   * - 夾角不大時，下半身轉向移動方向、上半身反向扭回來，最多扭 LEG_TWIST。
+   * - 往後方移動時改成倒退跑（Walk 倒著播），下半身只轉偏離正後方的那一點。
+   * 進入與離開倒退跑的門檻不同，在臨界角度附近才不會來回切換。
+   */
+  private steer(moving: boolean, facing: number, dt: number) {
+    let target = 0;
+    if (moving && this.speed > 0.5) {
+      const rel = wrapAngle(this.heading - facing);
+      const off = Math.abs(rel);
+      if (this.backward ? off < BACKPEDAL_EXIT : off > BACKPEDAL_ENTER) this.backward = !this.backward;
+      target = THREE.MathUtils.clamp(this.backward ? wrapAngle(rel - Math.PI) : rel, -LEG_TWIST, LEG_TWIST);
+    } else this.backward = false;
+    this.legYaw += (target - this.legYaw) * Math.min(1, dt * 10);
+  }
+
+  /** 在動作之上疊加下半身的轉向；動作每格都會重寫骨頭的旋轉，所以不會累積。 */
+  private twist() {
+    if (!this.hips?.parent || !this.spine || Math.abs(this.legYaw) < 1e-3) return;
+    // 「往上」在 Hips 父節點的座標裡是哪個方向
+    this.hips.parent.getWorldQuaternion(tmpQuat);
+    tmpUp.set(0, 1, 0).applyQuaternion(tmpQuat.invert());
+    this.hips.quaternion.premultiply(tmpYaw.setFromAxisAngle(tmpUp, this.legYaw));
+    // 同一個「往上」換到 Hips 自己的座標裡，Spine 反向轉回來
+    tmpUp.applyQuaternion(tmpQuat.copy(this.hips.quaternion).invert());
+    this.spine.quaternion.premultiply(tmpYaw.setFromAxisAngle(tmpUp, -this.legYaw));
   }
 
   private apply() {
@@ -228,11 +288,11 @@ class HeroAnimator {
  */
 export function animateUnit(
   model: THREE.Object3D,
-  unit: { moving: boolean; swing: number; x: number; z: number },
+  unit: { moving: boolean; swing: number; x: number; z: number; facing: number },
   dt: number,
 ): boolean {
   const animator = model.userData.animator as HeroAnimator | undefined;
-  animator?.update(unit.moving, unit.swing, dt, unit.x, unit.z);
+  animator?.update(unit.moving, unit.swing, dt, unit.x, unit.z, unit.facing);
   return !!animator;
 }
 
