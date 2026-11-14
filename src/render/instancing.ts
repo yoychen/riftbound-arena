@@ -22,7 +22,15 @@ const loader = new GLTFLoader();
 
 /** 讀入 art/ 腳本匯出的 .glb。 */
 export async function loadModel(url: string): Promise<THREE.Object3D> {
-  return (await loader.loadAsync(url)).scene;
+  return (await loadAnimatedModel(url)).scene;
+}
+
+/** 讀入帶骨架與動作的 .glb（英雄）。 */
+export async function loadAnimatedModel(
+  url: string,
+): Promise<{ scene: THREE.Object3D; animations: THREE.AnimationClip[] }> {
+  const gltf = await loader.loadAsync(url);
+  return { scene: gltf.scene, animations: gltf.animations };
 }
 
 export function findGeometry(root: THREE.Object3D, name: string): THREE.BufferGeometry {

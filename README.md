@@ -58,7 +58,7 @@ blender --background --factory-startup --python art/build_rock.py
 blender --background --factory-startup --python art/build_hero_swordsman.py  # 另有 _archer、_mage、_fighter
 ```
 
-沒有 Blender 也可以 `pip install bpy==5.2.4`，改用 `python art/build_<名稱>.py` 執行。英雄腳本設 `HERO_PREVIEW=<路徑>.png` 會另外渲染一張多視角預覽圖（Cycles，CPU 即可）。
+沒有 Blender 也可以 `pip install bpy==5.2.4`，改用 `python art/build_<名稱>.py` 執行。英雄腳本設 `HERO_PREVIEW=<路徑>.png` 會另外渲染一張多視角預覽圖（Cycles，CPU 即可）。綁了骨架的英雄（目前是逐風劍士，骨架與動作工具在 `art/rig.py`）另可設 `HERO_ANIM_PREVIEW=<路徑>.png` 渲染動作檢查圖。
 
 每支腳本會覆寫 `art/<名稱>.blend` 與 `src/assets/models/<名稱>.glb`。共同的匯出約定（1 單位 = 1 公尺、頂點色只帶明暗、碰撞不從模型推算）寫在 `art/lowpoly.py`，各模型的物件名稱與原點寫在各自腳本開頭。
 

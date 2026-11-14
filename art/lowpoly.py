@@ -55,8 +55,13 @@ def jittered_icosphere(radius, subdivisions, jitter, rng):
     return bm
 
 
-def finish(bm, name):
-    """把 bmesh 變成場景裡的物件，並設定好讓 glTF 匯出帶上頂點色。"""
+def finish(bm, name, groups=None):
+    """
+    把 bmesh 變成場景裡的物件，並設定好讓 glTF 匯出帶上頂點色。
+
+    groups：要綁骨架時傳骨頭名稱的清單。bmesh 的 deform 層用的是索引，
+    這裡依同樣的順序在物件上建立頂點群組，索引才對得上。
+    """
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     mesh = bpy.data.meshes.new(name)
     bm.to_mesh(mesh)
@@ -68,6 +73,8 @@ def finish(bm, name):
     for poly in mesh.polygons:
         poly.use_smooth = False  # 平面著色：低多邊形風格
     obj = bpy.data.objects.new(name, mesh)
+    for group in groups or ():
+        obj.vertex_groups.new(name=group)
     bpy.context.scene.collection.objects.link(obj)
     # 頂點色要被材質用到，glTF 匯出才會帶上 COLOR_0。
     material = bpy.data.materials.new(name + "Mat")
@@ -95,6 +102,10 @@ def export(name, objects):
         export_materials="EXPORT",
         export_vertex_color="ACTIVE",
         export_all_vertex_colors=False,
+        # 有骨架的模型（英雄）一併匯出蒙皮與每個動作；靜態模型不受影響。
+        export_skins=True,
+        export_animations=True,
+        export_animation_mode="ACTIONS",
     )
     # save_as_mainfile 覆寫既有檔案時會留下 .blend1 備份，用不到。
     backup = os.path.join(HERE, name + ".blend1")
@@ -105,6 +116,10 @@ def export(name, objects):
         d = obj.dimensions
         print(f"[{name}] {obj.name}: {tris} tris, size {d.x:.2f} x {d.y:.2f} x {d.z:.2f}")
     print(f"[{name}] wrote {glb} ({os.path.getsize(glb)} bytes)")
+
+
+class _Verts(list):
+    rings: list
 
 
 def _as_section(r):
@@ -124,7 +139,8 @@ def tube(bm, path, radii, sides=6, ref=(1, 0, 0), phase=0.0, cap=True, loop=Fals
     - phase：截面的起始角度（弧度）。sides=4 時給 pi/4 會得到方形截面。
     - loop：頭尾相接成環（例如圍在脖子上的圍巾），此時不加端蓋。
 
-    回傳這段新建的所有頂點。
+    回傳這段新建的所有頂點（list）；`.rings` 另外依序列出每一圈的頂點，
+    綁骨架時用來決定每一圈跟哪根骨頭走。
     """
     import math
 
@@ -140,7 +156,8 @@ def tube(bm, path, radii, sides=6, ref=(1, 0, 0), phase=0.0, cap=True, loop=Fals
         tangents.append(t.normalized())
     a = game_to_blender(*ref)
     rings = []
-    new_verts = []
+    new_verts = _Verts()
+    new_verts.rings = rings
     for i, (p, t, (ra, rb)) in enumerate(zip(pts, tangents, secs)):
         a = (a - t * a.dot(t)).normalized()
         b = t.cross(a)
@@ -184,16 +201,14 @@ def mirror_x(path):
     return [(-x, y, z) for (x, y, z) in path]
 
 
-def render_preview(path, tints, size=360):
+def preview_setup(tints, size=360):
     """
-    匯出之後渲染一張多視角預覽圖（前、斜前、側、背，以及遊戲鏡頭角度），
-    讓不開 Blender 介面也能檢查造型。相機、燈光、上色只加在匯出之後，不會
-    進到 .glb；tints 是物件名稱 → 遊戲裡的顏色（0xRRGGBB），模擬遊戲把頂點
-    明暗乘上色相的結果。用 Cycles（CPU）渲染，沒有 GPU 也能跑。
+    預覽渲染的共用準備：依 tints（物件名稱 → 遊戲裡的 0xRRGGBB）替每個物件
+    換上「頂點明暗 × 色相」的材質，模擬遊戲裡的上色；再加上世界光與太陽，
+    用 Cycles（CPU）渲染，沒有 GPU 也能跑。只在匯出之後呼叫，不會進到 .glb。
+    回傳取景用的 (目標點, 畫框大小)。
     """
     import math
-
-    from PIL import Image
 
     scene = bpy.context.scene
     for obj in list(scene.objects):
@@ -235,43 +250,65 @@ def render_preview(path, tints, size=360):
     sun.rotation_euler = (math.radians(40), 0, math.radians(-30))
     scene.collection.objects.link(sun)
 
-    # 依模型實際大小取景。角色朝向遊戲的 +Z，也就是 Blender 的 -Y。
+    # 依模型實際大小取景（用靜止姿勢的包圍盒）。
     corners = [o.matrix_world @ Vector(c) for o in scene.objects if o.type == "MESH" for c in o.bound_box]
     lo = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
     hi = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
     target = Vector((0, 0, (lo.z + hi.z) / 2))
     frame = max(hi.z - lo.z, hi.x - lo.x, hi.y - lo.y) * 1.12
-    views = [
-        ("front", 0, 8, False),
-        ("3/4", 40, 12, False),
-        ("side", 90, 0, False),
-        ("back", 180, 8, False),
-        ("game", 0, 50, True),
-    ]
-    tiles = []
-    tmp = path + ".tile.png"
-    for label, yaw, pitch, persp in views:
-        cam = bpy.data.objects.new("Cam_" + label, bpy.data.cameras.new("Cam_" + label))
-        scene.collection.objects.link(cam)
-        dist = 40.0 if persp else 10.0
-        y, p = math.radians(yaw), math.radians(pitch)
-        offset = Vector((math.sin(y) * math.cos(p), -math.cos(y) * math.cos(p), math.sin(p))) * dist
-        cam.location = target + offset
-        cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
-        if persp:
-            cam.data.lens = 420 * 3.4 / frame  # 遠處長焦：近似遊戲裡從高處往下看的樣子
-        else:
-            cam.data.type = "ORTHO"
-            cam.data.ortho_scale = frame
-        scene.camera = cam
-        scene.render.filepath = tmp
-        bpy.ops.render.render(write_still=True)
-        tile = Image.open(tmp).convert("RGBA")
-        bg = Image.new("RGBA", tile.size, (96, 116, 104, 255))
-        tiles.append(Image.alpha_composite(bg, tile))
+    return target, frame
+
+
+def render_view(target, frame, yaw, pitch, persp=False):
+    """
+    從指定角度渲染一格，回傳 PIL 圖。角色朝向遊戲的 +Z，也就是 Blender 的 -Y；
+    yaw 0 是正面，persp=True 用遠處長焦近似遊戲裡從高處往下看的鏡頭。
+    """
+    import math
+
+    from PIL import Image
+
+    scene = bpy.context.scene
+    cam = bpy.data.objects.new("PreviewCam", bpy.data.cameras.new("PreviewCam"))
+    scene.collection.objects.link(cam)
+    dist = 40.0 if persp else 10.0
+    y, p = math.radians(yaw), math.radians(pitch)
+    offset = Vector((math.sin(y) * math.cos(p), -math.cos(y) * math.cos(p), math.sin(p))) * dist
+    cam.location = target + offset
+    cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
+    if persp:
+        cam.data.lens = 420 * 3.4 / frame
+    else:
+        cam.data.type = "ORTHO"
+        cam.data.ortho_scale = frame
+    scene.camera = cam
+    import tempfile
+
+    tmp = os.path.join(tempfile.gettempdir(), "lowpoly_preview_tile.png")
+    scene.render.filepath = tmp
+    bpy.ops.render.render(write_still=True)
+    tile = Image.open(tmp).convert("RGBA")
     os.remove(tmp)
-    sheet = Image.new("RGBA", (size * len(tiles), size), (0, 0, 0, 255))
+    bpy.data.objects.remove(cam)
+    bg = Image.new("RGBA", tile.size, (96, 116, 104, 255))
+    return Image.alpha_composite(bg, tile)
+
+
+def save_sheet(path, tiles, columns=None):
+    from PIL import Image
+
+    columns = columns or len(tiles)
+    w, h = tiles[0].size
+    rows = (len(tiles) + columns - 1) // columns
+    sheet = Image.new("RGBA", (w * columns, h * rows), (0, 0, 0, 255))
     for i, t in enumerate(tiles):
-        sheet.paste(t, (i * size, 0))
+        sheet.paste(t, ((i % columns) * w, (i // columns) * h))
     sheet.convert("RGB").save(path)
     print(f"[preview] {path}")
+
+
+def render_preview(path, tints, size=360):
+    """多視角預覽圖：前、斜前、側、背，以及遊戲鏡頭角度。"""
+    target, frame = preview_setup(tints, size)
+    views = [(0, 8, False), (40, 12, False), (90, 0, False), (180, 8, False), (0, 50, True)]
+    save_sheet(path, [render_view(target, frame, *view) for view in views])

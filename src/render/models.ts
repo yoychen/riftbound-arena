@@ -8,7 +8,8 @@ import * as THREE from "three";
 import { HEROES } from "../data/heroes.js";
 import { teamColors } from "./terrain.js";
 import { box, cyl, mesh, scene, sphere } from "./renderer.js";
-import { loadModel, shadedMaterial } from "./instancing.js";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { loadAnimatedModel, shadedMaterial } from "./instancing.js";
 import swordsmanUrl from "../assets/models/hero_swordsman.glb?url";
 import archerUrl from "../assets/models/hero_archer.glb?url";
 import mageUrl from "../assets/models/hero_mage.glb?url";
@@ -101,10 +102,10 @@ const HERO_MODELS: HeroModel[] = [
  * 載入是非同步的，unitModel 卻得同步回傳；模型通常在選完英雄前就載好了，
  * 萬一還沒好（或載入失敗），那一隻就先用 unitModel 裡程式拼出來的版本。
  */
-const loadedHeroes = new Map<number, THREE.Object3D>();
+const loadedHeroes = new Map<number, { model: THREE.Object3D; clips: THREE.AnimationClip[] }>();
 HERO_MODELS.forEach(({ url, colors, glow = [] }, hero) => {
-  loadModel(url)
-    .then((model) => {
+  loadAnimatedModel(url)
+    .then(({ scene: model, animations }) => {
       model.traverse((o) => {
         const part = o as THREE.Mesh;
         if (!part.isMesh) return;
@@ -120,19 +121,111 @@ HERO_MODELS.forEach(({ url, colors, glow = [] }, hero) => {
         part.receiveShadow = true;
         part.userData.shared = true;
       });
-      loadedHeroes.set(hero, model);
+      loadedHeroes.set(hero, { model, clips: animations });
     })
     .catch((error) => {
       console.error(`英雄 ${hero} 的模型載入失敗，改用程式生成的模型`, error);
     });
 });
 
+/** 下半身的骨頭；其餘（Spine 以上與雙手）是上半身。名稱見 art/rig.py。 */
+const LOWER_BODY = /^(Hips|Thigh|Shin|Foot)/;
+
+function bodyHalf(clip: THREE.AnimationClip, lower: boolean): THREE.AnimationClip {
+  return new THREE.AnimationClip(
+    `${clip.name}.${lower ? "lower" : "upper"}`,
+    clip.duration,
+    clip.tracks.filter((t) => LOWER_BODY.test(t.name) === lower),
+  );
+}
+
+/**
+ * 英雄的動作：Idle、Walk、Attack（art/rig.py 與各英雄腳本做的）。
+ *
+ * 上下半身分開混合：下半身只看有沒有在移動（Idle ↔ Walk）；上半身平常跟著
+ * 下半身，攻擊時改播 Attack —— 射手邊跑邊射時腳照樣在跑。每組權重加起來都是 1，
+ * 混合時才不會被拉回靜止姿勢。
+ *
+ * 只讀實體的 moving 與 swing（普攻時設為 0.18、逐格遞減），不碰模擬。
+ */
+class HeroAnimator {
+  private readonly mixer: THREE.AnimationMixer;
+  private readonly idle: THREE.AnimationAction[];
+  private readonly walk: THREE.AnimationAction[];
+  private readonly attack?: THREE.AnimationAction;
+  private walkWeight = 0;
+  private attackWeight = 0;
+  private lastSwing = 0;
+
+  constructor(root: THREE.Object3D, clips: THREE.AnimationClip[]) {
+    this.mixer = new THREE.AnimationMixer(root);
+    const clip = (name: string) => clips.find((c) => c.name === name);
+    const halves = (name: string) => {
+      const c = clip(name);
+      if (!c) throw new Error(`英雄模型缺少 ${name} 動作`);
+      return [bodyHalf(c, true), bodyHalf(c, false)].map((h) => {
+        const action = this.mixer.clipAction(h);
+        action.play();
+        return action;
+      });
+    };
+    this.idle = halves("Idle");
+    this.walk = halves("Walk");
+    // 每隻英雄的呼吸錯開，站在一起時才不會同步起伏。
+    for (const a of this.idle) a.time = Math.random() * a.getClip().duration;
+    const attack = clip("Attack");
+    if (attack) {
+      this.attack = this.mixer.clipAction(bodyHalf(attack, false));
+      this.attack.setLoop(THREE.LoopOnce, 1);
+      this.attack.clampWhenFinished = true;
+    }
+    this.apply();
+  }
+
+  update(moving: boolean, swing: number, dt: number) {
+    if (this.attack && swing > this.lastSwing + 1e-4) {
+      this.attack.reset().play();
+      this.attackWeight = 1;
+    }
+    this.lastSwing = swing;
+    const attacking =
+      !!this.attack && this.attack.isRunning() && this.attack.time < this.attack.getClip().duration - 0.08;
+    this.walkWeight += ((moving ? 1 : 0) - this.walkWeight) * Math.min(1, dt * 12);
+    this.attackWeight += ((attacking ? 1 : 0) - this.attackWeight) * Math.min(1, dt * 20);
+    this.apply();
+    this.mixer.update(dt);
+  }
+
+  private apply() {
+    const w = this.walkWeight,
+      a = this.attack ? this.attackWeight : 0;
+    this.idle[0].setEffectiveWeight(1 - w);
+    this.walk[0].setEffectiveWeight(w);
+    this.idle[1].setEffectiveWeight((1 - w) * (1 - a));
+    this.walk[1].setEffectiveWeight(w * (1 - a));
+    this.attack?.setEffectiveWeight(a);
+  }
+}
+
+/**
+ * 推進單位的骨架動作。回傳 false 表示這個模型沒有動作（程式拼出來的模型），
+ * 呼叫端就沿用原本「移動時整隻上下跳」的表現。
+ */
+export function animateUnit(model: THREE.Object3D, moving: boolean, swing: number, dt: number): boolean {
+  const animator = model.userData.animator as HeroAnimator | undefined;
+  animator?.update(moving, swing, dt);
+  return !!animator;
+}
+
 function unitModel(type: string, team: number, hero = 0): THREE.Group {
   const root = new THREE.Group();
   const c = team < 0 ? 0xcf7446 : teamColors[team];
   const blenderHero = type === "hero" ? loadedHeroes.get(hero) : undefined;
   if (blenderHero) {
-    root.add(blenderHero.clone());
+    // 有骨架的模型要用 SkeletonUtils 複製，骨頭才會接到新的那一份。
+    const body = cloneSkinned(blenderHero.model);
+    root.add(body);
+    if (blenderHero.clips.length) root.userData.animator = new HeroAnimator(body, blenderHero.clips);
   } else if (type === "hero") {
     const h = HEROES[hero],
       bulky = hero === 3;
@@ -316,6 +409,8 @@ function zoneMesh(x: number, z: number, r: number, color: number) {
 export function disposeModel(model: unknown, disposeMaterial = false) {
   if (!model) return;
   (model as THREE.Object3D).traverse((o) => {
+    // 每份複製各有自己的骨架，骨架的骨頭貼圖要跟著釋放。
+    (o as Partial<THREE.SkinnedMesh>).skeleton?.dispose();
     if (o.userData.shared) return; // 共用的英雄模型，下一場還要用
     const mesh = o as Partial<THREE.Mesh>;
     mesh.geometry?.dispose();
