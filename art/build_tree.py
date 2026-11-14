@@ -19,11 +19,11 @@ import os
 import random
 import sys
 
-import bmesh
-from mathutils import Vector
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lowpoly import export, finish, game_to_blender, jittered_icosphere, reset_scene, shade_by_height  # noqa: E402
+
+import bmesh  # noqa: E402  （lowpoly 已先載入 bpy）
+from mathutils import Vector  # noqa: E402
 
 # 固定亂數：每次重跑得到同一棵樹。
 rng = random.Random(171)

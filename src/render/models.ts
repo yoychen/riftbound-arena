@@ -8,14 +8,69 @@ import * as THREE from "three";
 import { HEROES } from "../data/heroes.js";
 import { teamColors } from "./terrain.js";
 import { box, cyl, mesh, scene, sphere } from "./renderer.js";
+import { loadModel, shadedMaterial } from "./instancing.js";
+import swordsmanUrl from "../assets/models/hero_swordsman.glb?url";
 
 const worldEntities = new THREE.Group();
 scene.add(worldEntities);
 
+/**
+ * Blender 建的英雄模型（art/build_hero_swordsman.py 等）。
+ *
+ * 模型只帶明暗，各部位的色相在這裡 —— key 是 .glb 裡的物件名稱。
+ * 還沒有 Blender 模型的英雄繼續用下面 unitModel 裡程式拼出來的版本。
+ */
+const HERO_MODELS: Record<number, { url: string; colors: Record<string, number> }> = {
+  0: {
+    url: swordsmanUrl,
+    colors: {
+      Coat: HEROES[0].color,
+      Skin: 0xe4c9a0,
+      Dark: 0x294343,
+      Boots: 0x5a4636,
+      Hair: 0x324e4c,
+      Scarf: 0xeef3ea,
+      Blade: 0xdbede3,
+      Gold: 0xcbb477,
+    },
+  },
+};
+
+/**
+ * 已載入的英雄模型。每個英雄只載入一次，場上的每個單位都 clone 一份 ——
+ * clone 共用幾何與材質，所以 disposeModel 要跳過標了 `shared` 的網格。
+ *
+ * 載入是非同步的，unitModel 卻得同步回傳；模型通常在選完英雄前就載好了，
+ * 萬一還沒好，那一隻就先用程式拼出來的版本。
+ */
+const loadedHeroes = new Map<number, THREE.Object3D>();
+for (const [hero, { url, colors }] of Object.entries(HERO_MODELS)) {
+  loadModel(url)
+    .then((model) => {
+      model.traverse((o) => {
+        const part = o as THREE.Mesh;
+        if (!part.isMesh) return;
+        const color = colors[part.name];
+        if (color === undefined) throw new Error(`英雄模型的 ${part.name} 沒有對應的顏色`);
+        part.material = shadedMaterial(color);
+        part.castShadow = true;
+        part.receiveShadow = true;
+        part.userData.shared = true;
+      });
+      loadedHeroes.set(Number(hero), model);
+    })
+    .catch((error) => {
+      console.error(`英雄 ${hero} 的模型載入失敗，改用程式生成的模型`, error);
+    });
+}
+
 function unitModel(type: string, team: number, hero = 0): THREE.Group {
   const root = new THREE.Group();
   const c = team < 0 ? 0xcf7446 : teamColors[team];
-  if (type === "hero") {
+  const blenderHero = type === "hero" ? loadedHeroes.get(hero) : undefined;
+  if (blenderHero) {
+    root.add(blenderHero.clone());
+  } else if (type === "hero") {
     const h = HEROES[hero],
       bulky = hero === 3;
     const body = cyl(
@@ -198,6 +253,7 @@ function zoneMesh(x: number, z: number, r: number, color: number) {
 export function disposeModel(model: unknown, disposeMaterial = false) {
   if (!model) return;
   (model as THREE.Object3D).traverse((o) => {
+    if (o.userData.shared) return; // 共用的英雄模型，下一場還要用
     const mesh = o as Partial<THREE.Mesh>;
     mesh.geometry?.dispose();
     if (disposeMaterial) (mesh.material as THREE.Material | undefined)?.dispose();

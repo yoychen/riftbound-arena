@@ -12,8 +12,9 @@ art/ 底下各個模型腳本共用的工具：建網格、寫頂點色明暗、
 
 import os
 
+# bpy 要先載入：pip 安裝的 bpy 模組要等它載入後才找得到 bmesh、mathutils。
+import bpy  # isort: skip
 import bmesh
-import bpy
 from mathutils import Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -104,3 +105,169 @@ def export(name, objects):
         d = obj.dimensions
         print(f"[{name}] {obj.name}: {tris} tris, size {d.x:.2f} x {d.y:.2f} x {d.z:.2f}")
     print(f"[{name}] wrote {glb} ({os.path.getsize(glb)} bytes)")
+
+
+def _as_section(r):
+    return (r, r) if isinstance(r, (int, float)) else r
+
+
+def tube(bm, path, radii, sides=6, ref=(1, 0, 0), phase=0.0, cap=True, loop=False):
+    """
+    沿著一條路徑「拉」出一段管狀網格：每個路徑點放一圈橢圓截面，再把相鄰
+    兩圈連成面。身體、手腳、頭、頭髮、圍巾、劍都是用它一圈一圈拉出來的。
+
+    - path：遊戲座標（+Y 向上、+Z 朝前）的點列。
+    - radii：每個點的截面半徑，可以是一個數字或 (a, b) 兩軸。半徑為 0 的
+      點收成一個頂點，用來做尖端。
+    - ref：截面第一軸 a 的大致方向（遊戲座標），沿路徑以平行移動延續，
+      管子轉彎時截面才不會扭轉。扁的截面（圍巾、劍身）靠它決定朝向。
+    - phase：截面的起始角度（弧度）。sides=4 時給 pi/4 會得到方形截面。
+    - loop：頭尾相接成環（例如圍在脖子上的圍巾），此時不加端蓋。
+
+    回傳這段新建的所有頂點。
+    """
+    import math
+
+    pts = [game_to_blender(*p) for p in path]
+    secs = [_as_section(r) for r in radii]
+    n = len(pts)
+    tangents = []
+    for i in range(n):
+        if loop:
+            t = pts[(i + 1) % n] - pts[i - 1]
+        else:
+            t = pts[min(i + 1, n - 1)] - pts[max(i - 1, 0)]
+        tangents.append(t.normalized())
+    a = game_to_blender(*ref)
+    rings = []
+    new_verts = []
+    for i, (p, t, (ra, rb)) in enumerate(zip(pts, tangents, secs)):
+        a = (a - t * a.dot(t)).normalized()
+        b = t.cross(a)
+        if ra == 0 and rb == 0:
+            v = bm.verts.new(p)
+            rings.append([v])
+            new_verts.append(v)
+            continue
+        ring = []
+        for k in range(sides):
+            ang = phase + 2 * math.pi * k / sides
+            ring.append(bm.verts.new(p + a * (ra * math.cos(ang)) + b * (rb * math.sin(ang))))
+        rings.append(ring)
+        new_verts.extend(ring)
+    pairs = list(zip(rings, rings[1:]))
+    if loop:
+        pairs.append((rings[-1], rings[0]))
+    for r0, r1 in pairs:
+        if len(r0) == 1 and len(r1) == 1:
+            continue
+        if len(r0) == 1:
+            for k in range(sides):
+                bm.faces.new((r0[0], r1[k], r1[(k + 1) % sides]))
+        elif len(r1) == 1:
+            for k in range(sides):
+                bm.faces.new((r0[k], r0[(k + 1) % sides], r1[0]))
+        else:
+            for k in range(sides):
+                k1 = (k + 1) % sides
+                bm.faces.new((r0[k], r0[k1], r1[k1], r1[k]))
+    if cap and not loop:
+        if len(rings[0]) > 1:
+            bm.faces.new(list(reversed(rings[0])))
+        if len(rings[-1]) > 1:
+            bm.faces.new(rings[-1])
+    return new_verts
+
+
+def mirror_x(path):
+    """把遊戲座標的點列左右鏡像（x 取負），用來做另一邊的手腳。"""
+    return [(-x, y, z) for (x, y, z) in path]
+
+
+def render_preview(path, tints, size=360):
+    """
+    匯出之後渲染一張多視角預覽圖（前、斜前、側、背，以及遊戲鏡頭角度），
+    讓不開 Blender 介面也能檢查造型。相機、燈光、上色只加在匯出之後，不會
+    進到 .glb；tints 是物件名稱 → 遊戲裡的顏色（0xRRGGBB），模擬遊戲把頂點
+    明暗乘上色相的結果。用 Cycles（CPU）渲染，沒有 GPU 也能跑。
+    """
+    import math
+
+    from PIL import Image
+
+    scene = bpy.context.scene
+    for obj in list(scene.objects):
+        if obj.name not in tints:
+            continue
+        hexc = tints[obj.name]
+        rgb = [((hexc >> s) & 255) / 255 for s in (16, 8, 0)]
+        # sRGB → 線性
+        lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+        m = bpy.data.materials.new(obj.name + "Preview")
+        nodes, links = m.node_tree.nodes, m.node_tree.links
+        bsdf = nodes.get("Principled BSDF")
+        bsdf.inputs["Roughness"].default_value = 0.88
+        vc = nodes.new("ShaderNodeVertexColor")
+        vc.layer_name = "Col"
+        mix = nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.blend_type = "MULTIPLY"
+        mix.inputs["Factor"].default_value = 1.0
+        links.new(vc.outputs["Color"], mix.inputs["A"])
+        mix.inputs["B"].default_value = (*lin, 1.0)
+        links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
+        obj.data.materials.clear()
+        obj.data.materials.append(m)
+
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+    scene.cycles.samples = 24
+    scene.cycles.use_denoising = False
+    scene.render.resolution_x = scene.render.resolution_y = size
+    scene.render.film_transparent = True
+    world = bpy.data.worlds.new("PreviewWorld")
+    world.use_nodes = True
+    world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.75, 0.82, 0.8, 1)
+    world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.9
+    scene.world = world
+    sun = bpy.data.objects.new("PreviewSun", bpy.data.lights.new("PreviewSun", "SUN"))
+    sun.data.energy = 3.0
+    sun.rotation_euler = (math.radians(40), 0, math.radians(-30))
+    scene.collection.objects.link(sun)
+
+    # 角色朝向遊戲的 +Z，也就是 Blender 的 -Y。
+    target = Vector((0, 0, 1.25))
+    views = [
+        ("front", 0, 8, False),
+        ("3/4", 40, 12, False),
+        ("side", 90, 0, False),
+        ("back", 180, 8, False),
+        ("game", 0, 50, True),
+    ]
+    tiles = []
+    tmp = path + ".tile.png"
+    for label, yaw, pitch, persp in views:
+        cam = bpy.data.objects.new("Cam_" + label, bpy.data.cameras.new("Cam_" + label))
+        scene.collection.objects.link(cam)
+        dist = 40.0 if persp else 10.0
+        y, p = math.radians(yaw), math.radians(pitch)
+        offset = Vector((math.sin(y) * math.cos(p), -math.cos(y) * math.cos(p), math.sin(p))) * dist
+        cam.location = target + offset
+        cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
+        if persp:
+            cam.data.lens = 420  # 遠處長焦：近似遊戲裡從高處往下看的樣子
+        else:
+            cam.data.type = "ORTHO"
+            cam.data.ortho_scale = 3.4
+        scene.camera = cam
+        scene.render.filepath = tmp
+        bpy.ops.render.render(write_still=True)
+        tile = Image.open(tmp).convert("RGBA")
+        bg = Image.new("RGBA", tile.size, (96, 116, 104, 255))
+        tiles.append(Image.alpha_composite(bg, tile))
+    os.remove(tmp)
+    sheet = Image.new("RGBA", (size * len(tiles), size), (0, 0, 0, 255))
+    for i, t in enumerate(tiles):
+        sheet.paste(t, (i * size, 0))
+    sheet.convert("RGB").save(path)
+    print(f"[preview] {path}")
