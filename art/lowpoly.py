@@ -106,6 +106,8 @@ def export(name, objects):
         export_skins=True,
         export_animations=True,
         export_animation_mode="ACTIONS",
+        # 物件的自訂屬性（例如骨架上的 walk_speed）匯出成 extras，three.js 放進 userData。
+        export_extras=True,
     )
     # save_as_mainfile 覆寫既有檔案時會留下 .blend1 備份，用不到。
     backup = os.path.join(HERE, name + ".blend1")

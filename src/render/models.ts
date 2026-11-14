@@ -146,7 +146,7 @@ function bodyHalf(clip: THREE.AnimationClip, lower: boolean): THREE.AnimationCli
  * 下半身，攻擊時改播 Attack —— 射手邊跑邊射時腳照樣在跑。每組權重加起來都是 1，
  * 混合時才不會被拉回靜止姿勢。
  *
- * 只讀實體的 moving 與 swing（普攻時設為 0.18、逐格遞減），不碰模擬。
+ * 只讀實體的 moving、swing（普攻時設為 0.18、逐格遞減）與位置，不碰模擬。
  */
 class HeroAnimator {
   private readonly mixer: THREE.AnimationMixer;
@@ -156,6 +156,10 @@ class HeroAnimator {
   private walkWeight = 0;
   private attackWeight = 0;
   private lastSwing = 0;
+  /** 動畫原速時腳往後蹬的速度（公尺／秒），art/rig.py 的 walk() 算好存在骨架上。 */
+  private readonly walkSpeed: number;
+  private speed = 0;
+  private last?: { x: number; z: number };
 
   constructor(root: THREE.Object3D, clips: THREE.AnimationClip[]) {
     this.mixer = new THREE.AnimationMixer(root);
@@ -169,6 +173,7 @@ class HeroAnimator {
         return action;
       });
     };
+    this.walkSpeed = Number(root.getObjectByName("Skeleton")?.userData.walk_speed) || 6;
     this.idle = halves("Idle");
     this.walk = halves("Walk");
     // 每隻英雄的呼吸錯開，站在一起時才不會同步起伏。
@@ -182,7 +187,17 @@ class HeroAnimator {
     this.apply();
   }
 
-  update(moving: boolean, swing: number, dt: number) {
+  update(moving: boolean, swing: number, dt: number, x: number, z: number) {
+    // 依實際移動速度調整跑步的播放速度：腳往後蹬的速度等於身體前進的速度，
+    // 踩地的腳才不會在地上滑。閃避、被擊退這類瞬間位移不算，夾在合理範圍內。
+    if (this.last && dt > 0) {
+      const v = Math.hypot(x - this.last.x, z - this.last.z) / dt;
+      this.speed += (v - this.speed) * Math.min(1, dt * 10);
+    }
+    this.last = { x, z };
+    const pace = THREE.MathUtils.clamp(this.speed / this.walkSpeed, 0.6, 2);
+    for (const a of this.walk) a.timeScale = pace;
+
     if (this.attack && swing > this.lastSwing + 1e-4) {
       this.attack.reset().play();
       this.attackWeight = 1;
@@ -211,9 +226,13 @@ class HeroAnimator {
  * 推進單位的骨架動作。回傳 false 表示這個模型沒有動作（程式拼出來的模型），
  * 呼叫端就沿用原本「移動時整隻上下跳」的表現。
  */
-export function animateUnit(model: THREE.Object3D, moving: boolean, swing: number, dt: number): boolean {
+export function animateUnit(
+  model: THREE.Object3D,
+  unit: { moving: boolean; swing: number; x: number; z: number },
+  dt: number,
+): boolean {
   const animator = model.userData.animator as HeroAnimator | undefined;
-  animator?.update(moving, swing, dt);
+  animator?.update(unit.moving, unit.swing, dt, unit.x, unit.z);
   return !!animator;
 }
 

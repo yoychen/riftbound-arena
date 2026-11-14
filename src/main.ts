@@ -535,7 +535,7 @@ function syncModels(dt: number) {
     modelOf(e).visible = e.hp > 0;
     if (e.hp <= 0) continue;
     // 有骨架動作的英雄由走路動畫表現移動；其他單位移動時整隻上下跳。
-    const animated = animateUnit(modelOf(e), e.moving, e.swing, dt);
+    const animated = animateUnit(modelOf(e), e, dt);
     const bob =
       !animated && (e.type === "hero" || e.type === "minion") && e.moving
         ? Math.abs(Math.sin(world.time * 14 + e.id)) * 0.13

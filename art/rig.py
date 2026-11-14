@@ -15,7 +15,8 @@
 子骨頭的旋轉疊在父骨頭之上（手臂跟著胸口轉）。
 
 動作名稱（Idle、Walk、Attack）會原樣成為 .glb 裡的動畫名稱，src/render/models.ts
-依名稱播放。
+依名稱播放。Walk 另外在骨架上留下 `walk_speed`（公尺／秒），遊戲用它讓腳步
+跟上實際的移動速度。
 """
 
 import math
@@ -274,36 +275,47 @@ def idle(arm, frames=60):
     return loop(arm, "Idle", frames, pose)
 
 
-def walk(arm, frames=16, stride=34, arm_swing=(26, 26), lean=8):
+def walk(arm, hip_y, frames=12, stride=48, arm_swing=(30, 30), lean=10):
     """
-    跑步循環。英雄移動很快（每秒 8 公尺左右），所以是小跑，身體前傾。
-    arm_swing 是 (右手, 左手) 的擺幅，拿著武器的手可以擺小一點。
+    跑步循環。hip_y 是髖關節離地的高度，用來算腳往後蹬的速度。
+
+    腳要「踩住」地面不打滑，踩地那隻腳往後移動的速度得等於身體前進的速度。
+    這裡算出這個速度存在骨架上（`walk_speed`，匯出成 glTF extras），遊戲依角色
+    實際的移動速度調整播放速度，兩者就對得上。
+
+    - 踩地的腳從前擺到後的距離約 2 · hip_y · sin(stride)，花半個循環。
+    - 腿張開時腳會離地，所以臀部跟著降低 hip_y · (1 − cos θ)，讓腳碰得到地。
+    - arm_swing 是 (右手, 左手) 的擺幅，拿著武器的手可以擺小一點。
     """
+    duration = frames / FPS
+    arm["walk_speed"] = 4 * hip_y * math.sin(math.radians(stride)) / duration
 
     def pose(t):
         p = t * math.tau
         s, c = math.sin(p), math.cos(p)
+        spread = math.radians(stride * abs(s))
         return {
-            # 每一步落地時身體最低，一個循環兩步
-            "loc": (0, 0.035 * math.cos(2 * p) - 0.01, 0),
-            "Hips": rot((Y, 7 * s)),
-            "Spine": rot((X, lean), (Y, -10 * s)),
-            "Head": rot((X, -lean * 0.6), (Y, 3 * s)),
-            # 左腿往前時（s > 0）右腿往後；腿往前收時膝蓋彎得最多
+            # 腿張開時降低臀部，踩地的腳才不會懸空
+            "loc": (0, -0.8 * hip_y * (1 - math.cos(spread)), 0),
+            "Hips": rot((Y, 8 * s)),
+            "Spine": rot((X, lean), (Y, -12 * s)),
+            "Head": rot((X, -lean * 0.6), (Y, 4 * s)),
+            # 左腿往前時（s > 0）右腿往後；腿往前收時膝蓋彎得最多，踩地時幾乎打直
             "Thigh.L": rot((X, -stride * s)),
             "Thigh.R": rot((X, stride * s)),
-            "Shin.L": rot((X, 12 + 48 * max(0.0, c))),
-            "Shin.R": rot((X, 12 + 48 * max(0.0, -c))),
-            "Foot.L": rot((X, -10 * s)),
-            "Foot.R": rot((X, 10 * s)),
+            "Shin.L": rot((X, 8 + 62 * max(0.0, c))),
+            "Shin.R": rot((X, 8 + 62 * max(0.0, -c))),
+            # 腳掌保持大致平貼地面
+            "Foot.L": rot((X, stride * s * 0.6 - 8 * max(0.0, c))),
+            "Foot.R": rot((X, -stride * s * 0.6 - 8 * max(0.0, -c))),
             # 手和同側的腳反向擺
             "UpperArm.L": rot((X, arm_swing[1] * s)),
             "UpperArm.R": rot((X, -arm_swing[0] * s)),
-            "Forearm.L": rot((X, -25)),
+            "Forearm.L": rot((X, -30)),
             "Forearm.R": rot((X, -15)),
         }
 
-    return loop(arm, "Walk", frames, pose)
+    return loop(arm, "Walk", frames, pose, step=1)
 
 
 def one_shot(arm, name, keys):
