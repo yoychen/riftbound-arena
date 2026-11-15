@@ -286,7 +286,8 @@ def render_view(target, frame, yaw, pitch, persp=False):
     scene.camera = cam
     import tempfile
 
-    tmp = os.path.join(tempfile.gettempdir(), "lowpoly_preview_tile.png")
+    # 檔名帶程序編號：同時渲染好幾個模型時才不會互相覆蓋。
+    tmp = os.path.join(tempfile.gettempdir(), f"lowpoly_preview_tile_{os.getpid()}.png")
     scene.render.filepath = tmp
     bpy.ops.render.render(write_still=True)
     tile = Image.open(tmp).convert("RGBA")

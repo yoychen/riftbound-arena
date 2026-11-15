@@ -139,6 +139,31 @@ def bind_by_height(bm, verts, chain):
                 break
 
 
+def bind_skirt(bm, verts, chain, waist_y, hem_y, follow=0.7):
+    """
+    長袍、裙子：腰部（waist_y）以上照 chain 依高度漸變；往下到下擺（hem_y）
+    逐漸改跟大腿走，最多跟 follow 的比例，其餘留在 Hips，布料才不會像褲管
+    一樣整片跟著腿。左半邊跟左腿、右半邊跟右腿，正中間各半。
+    """
+    if not _enabled:
+        return
+    bind_by_height(bm, verts, chain)
+    layer = bm.verts.layers.deform.verify()
+    hips = BONES.index("Hips")
+    for vert in verts:
+        y = vert.co.z  # Blender 的 Z 是遊戲的 Y
+        if y >= waist_y:
+            continue
+        t = follow * min(1.0, (waist_y - y) / (waist_y - hem_y))
+        x = vert.co.x  # Blender 的 X 就是遊戲的 X
+        left = min(1.0, max(0.0, 0.5 + x / 0.3))
+        dv = vert[layer]
+        dv.clear()
+        dv[hips] = 1 - t
+        dv[BONES.index("Thigh.L")] = t * left
+        dv[BONES.index("Thigh.R")] = t * (1 - left)
+
+
 def check_bound(name, bm):
     """每個頂點都要有權重，漏綁的頂點會在動畫裡留在原地。"""
     layer = bm.verts.layers.deform.verify()
