@@ -14,6 +14,7 @@ import swordsmanUrl from "../assets/models/hero_swordsman.glb?url";
 import archerUrl from "../assets/models/hero_archer.glb?url";
 import mageUrl from "../assets/models/hero_mage.glb?url";
 import fighterUrl from "../assets/models/hero_fighter.glb?url";
+import minionUrl from "../assets/models/minion.glb?url";
 
 const worldEntities = new THREE.Group();
 scene.add(worldEntities);
@@ -128,6 +129,32 @@ HERO_MODELS.forEach(({ url, colors, glow = [] }, hero) => {
     });
 });
 
+/**
+ * Blender 建的小兵（art/build_minion.py）。只有兩個網格，場上同時有幾十隻：
+ * `Team` 的頂點色只帶明暗，乘上隊伍色；`Gear` 的頂點色本身就帶顏色，用白色材質畫。
+ * 兩隊共用同一份幾何與動作，只換 Team 的材質。
+ */
+const MINION_TEAM_COLORS = [0x428f99, 0xa95f68];
+const minionTeamMaterials = MINION_TEAM_COLORS.map((color) => shadedMaterial(color));
+let loadedMinion: { model: THREE.Object3D; clips: THREE.AnimationClip[] } | undefined;
+loadAnimatedModel(minionUrl)
+  .then(({ scene: model, animations }) => {
+    const gear = shadedMaterial(0xffffff);
+    model.traverse((o) => {
+      const part = o as THREE.Mesh;
+      if (!part.isMesh) return;
+      if (part.name !== "Team" && part.name !== "Gear") throw new Error(`小兵模型多了 ${part.name} 網格`);
+      part.material = part.name === "Team" ? minionTeamMaterials[0] : gear;
+      part.castShadow = true;
+      part.receiveShadow = true;
+      part.userData.shared = true;
+    });
+    loadedMinion = { model, clips: animations };
+  })
+  .catch((error) => {
+    console.error("小兵的模型載入失敗，改用程式生成的模型", error);
+  });
+
 /** 下半身的骨頭；其餘（Spine 以上與雙手）是上半身。名稱見 art/rig.py。 */
 const LOWER_BODY = /^(Hips|Thigh|Shin|Foot)/;
 
@@ -140,7 +167,7 @@ function bodyHalf(clip: THREE.AnimationClip, lower: boolean): THREE.AnimationCli
 }
 
 /**
- * 英雄的動作：Idle、Walk、Attack（art/rig.py 與各英雄腳本做的）。
+ * 英雄與小兵的動作：Idle、Walk、Attack（art/rig.py 與各模型腳本做的）。
  *
  * 上下半身分開混合：下半身只看有沒有在移動（Idle ↔ Walk）；上半身平常跟著
  * 下半身，攻擊時改播 Attack —— 射手邊跑邊射時腳照樣在跑。每組權重加起來都是 1，
@@ -164,7 +191,7 @@ function wrapAngle(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
 }
 
-class HeroAnimator {
+class SkeletalAnimator {
   private readonly mixer: THREE.AnimationMixer;
   private readonly idle: THREE.AnimationAction[];
   private readonly walk: THREE.AnimationAction[];
@@ -291,7 +318,7 @@ export function animateUnit(
   unit: { moving: boolean; swing: number; x: number; z: number; facing: number },
   dt: number,
 ): boolean {
-  const animator = model.userData.animator as HeroAnimator | undefined;
+  const animator = model.userData.animator as SkeletalAnimator | undefined;
   animator?.update(unit.moving, unit.swing, dt, unit.x, unit.z, unit.facing);
   return !!animator;
 }
@@ -299,12 +326,17 @@ export function animateUnit(
 function unitModel(type: string, team: number, hero = 0): THREE.Group {
   const root = new THREE.Group();
   const c = team < 0 ? 0xcf7446 : teamColors[team];
-  const blenderHero = type === "hero" ? loadedHeroes.get(hero) : undefined;
-  if (blenderHero) {
+  const rigged =
+    type === "hero" ? loadedHeroes.get(hero) : type === "minion" ? loadedMinion : undefined;
+  if (rigged) {
     // 有骨架的模型要用 SkeletonUtils 複製，骨頭才會接到新的那一份。
-    const body = cloneSkinned(blenderHero.model);
+    const body = cloneSkinned(rigged.model);
+    if (type === "minion")
+      body.traverse((o) => {
+        if (o.name === "Team") (o as THREE.Mesh).material = minionTeamMaterials[team] ?? minionTeamMaterials[0];
+      });
     root.add(body);
-    if (blenderHero.clips.length) root.userData.animator = new HeroAnimator(body, blenderHero.clips);
+    if (rigged.clips.length) root.userData.animator = new SkeletalAnimator(body, rigged.clips);
   } else if (type === "hero") {
     const h = HEROES[hero],
       bulky = hero === 3;
