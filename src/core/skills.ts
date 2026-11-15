@@ -134,13 +134,23 @@ interface CastContext {
 
 type Skill = (ctx: CastContext) => void;
 
+// 技能的距離與範圍。技能本身與觸控拖曳時的地面指示（SKILL_AIM）共用同一份數值。
+const WIND_SLASH_DASH = 6;
+const PIERCING_RANGE = 22;
+const ROLL_DASH = 6;
+const FROST_RANGE = 17;
+const LANDSLIDE_DASH = 7;
+const meteorRadius = (mods: Mods) => (mods.mega ? 9 : 6);
+const flameRadius = (mods: Mods) => (mods.mega ? 7 : 4.5);
+const thunderRadius = (mods: Mods) => (mods.mega ? 9 : 6);
+
 // ── 逐風劍士 ────────────────────────────────────────────────────
 
 /** 疾風斬：突進並劈開沿途的敵人。 */
 const windSlash: Skill = ({ world, field, caster, d, hero }) => {
   const fromX = caster.x;
   const fromZ = caster.z;
-  dash(world, field, caster, d, 6);
+  dash(world, field, caster, d, WIND_SLASH_DASH);
   // 判定沿著突進起點的軸線，所以被穿過的人也吃得到。
   for (const target of enemies(world, caster, 9)) {
     const ux = target.x - fromX;
@@ -170,7 +180,7 @@ const bladeStorm: Skill = ({ world, caster, hero, mods }) => {
 
 /** 穿星箭：貫穿一直線。 */
 const piercingArrow: Skill = ({ world, caster, d, mods }) => {
-  const shot = { range: 22, pierce: true, big: true, skill: true, color: 0xffd997 };
+  const shot = { range: PIERCING_RANGE, pierce: true, big: true, skill: true, color: 0xffd997 };
   shoot(world, caster, d, { ...shot, damage: 170 });
   if (mods.fan)
     for (const angle of [-0.22, 0.22])
@@ -179,7 +189,7 @@ const piercingArrow: Skill = ({ world, caster, d, mods }) => {
 
 /** 靈巧翻滾：向後拉開距離並短暫加快攻速。 */
 const nimbleRoll: Skill = ({ world, field, caster, d, mods }) => {
-  dash(world, field, caster, { x: -d.x, z: -d.z }, 6);
+  dash(world, field, caster, { x: -d.x, z: -d.z }, ROLL_DASH);
   caster.boost = 3;
   if (mods.roll)
     for (const offset of [-0.2, 0, 0.2])
@@ -188,7 +198,7 @@ const nimbleRoll: Skill = ({ world, field, caster, d, mods }) => {
 
 /** 流星箭雨：指定地點的持續轟炸，附帶緩速。 */
 const meteorVolley: Skill = ({ world, caster, target, mods }) => {
-  addZone(world, target.x, target.z, mods.mega ? 9 : 6, 4, caster, 95, 0xe9cc7d, 0.55, 0.6);
+  addZone(world, target.x, target.z, meteorRadius(mods), 4, caster, 95, 0xe9cc7d, 0.55, 0.6);
 };
 
 // ── 暮光法師 ────────────────────────────────────────────────────
@@ -197,7 +207,7 @@ const meteorVolley: Skill = ({ world, caster, target, mods }) => {
 const frostOrb: Skill = ({ world, caster, d, mods }) => {
   shoot(world, caster, d, {
     damage: 135,
-    range: 17,
+    range: FROST_RANGE,
     big: true,
     pierce: !!mods.fan,
     slow: 3,
@@ -208,19 +218,19 @@ const frostOrb: Skill = ({ world, caster, d, mods }) => {
 
 /** 烈焰印記：短延遲的高爆發，打在走不掉的目標身上。 */
 const flameBrand: Skill = ({ world, caster, target, mods }) => {
-  addZone(world, target.x, target.z, mods.mega ? 7 : 4.5, 1, caster, 235, 0xfa9870, 0.7);
+  addZone(world, target.x, target.z, flameRadius(mods), 1, caster, 235, 0xfa9870, 0.7);
 };
 
 /** 雷霆領域：持續落雷並緩速。 */
 const thunderDomain: Skill = ({ world, caster, target, mods }) => {
-  addZone(world, target.x, target.z, mods.mega ? 9 : 6, 4.5, caster, 100, 0xc1a1ff, 0.3, 0.8);
+  addZone(world, target.x, target.z, thunderRadius(mods), 4.5, caster, 100, 0xc1a1ff, 0.3, 0.8);
 };
 
 // ── 磐石鬥士 ────────────────────────────────────────────────────
 
 /** 山崩衝撞：撞開一群人並暈眩。 */
 const landslide: Skill = ({ world, field, caster, d, hero }) => {
-  dash(world, field, caster, d, 7);
+  dash(world, field, caster, d, LANDSLIDE_DASH);
   for (const target of enemies(world, caster, 4.5)) {
     damage(world, target, 165, caster, true);
     target.stun = 1.2;
@@ -240,6 +250,35 @@ const earthshatter: Skill = ({ world, caster, mods }) => {
   addZone(world, caster.x, caster.z, mods.mega ? 10 : 7, 0.8, caster, 340, 0xf9bd84, 0.45, 0, 2);
   caster.shield = (caster.shield) + 250;
 };
+
+/**
+ * 技能需要什麼瞄準，決定觸控時能不能拖曳、地面上畫什麼：
+ * - self：以自己為中心，按下就放，不拖曳。
+ * - direction：只看方向，距離固定（衝刺距離或射程），畫一支固定長度的箭頭。
+ *   flip 表示技能往瞄準的反方向移動（靈巧翻滾往後滾）：拖曳時改成「手指
+ *   拖向哪就往哪滾」，比較直覺，箭則朝反方向射。
+ * - point：放在指定的位置，畫出施放範圍與技能實際的作用範圍。
+ */
+export type AimShape =
+  | { kind: "self" }
+  | { kind: "direction"; length: number; flip?: boolean }
+  | { kind: "point"; radius: (mods: Mods) => number };
+
+/** 四位英雄 Q / E / R 的瞄準方式，索引與 HERO_SKILLS 相同。 */
+export const SKILL_AIM: AimShape[][] = [
+  [{ kind: "direction", length: WIND_SLASH_DASH }, { kind: "self" }, { kind: "self" }],
+  [
+    { kind: "direction", length: PIERCING_RANGE },
+    { kind: "direction", length: ROLL_DASH, flip: true },
+    { kind: "point", radius: meteorRadius },
+  ],
+  [
+    { kind: "direction", length: FROST_RANGE },
+    { kind: "point", radius: flameRadius },
+    { kind: "point", radius: thunderRadius },
+  ],
+  [{ kind: "direction", length: LANDSLIDE_DASH }, { kind: "self" }, { kind: "self" }],
+];
 
 /** 四位英雄的 Q / E / R。索引對應 HEROES 與技能槽。 */
 const HERO_SKILLS: Skill[][] = [

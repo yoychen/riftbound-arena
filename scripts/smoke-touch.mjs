@@ -61,6 +61,8 @@ const playerSpot = () =>
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-hero]", { timeout: 15000 });
+// 暮光法師的三個技能都能拖曳（方向、落點、落點），拖曳瞄準的檢查才測得到。
+await page.tap('[data-hero="2"]');
 await page.tap("#start");
 await page.waitForFunction(
   () => document.getElementById("skills").children.length === 4,

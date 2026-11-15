@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { camera, W, H, $ } from "../render/renderer.js";
 import { clamp } from "../core/vec.js";
-import { CAST_RANGE } from "../core/skills.js";
+import { CAST_RANGE, SKILL_AIM, type AimShape } from "../core/skills.js";
 import type { Entity, World } from "../core/world.js";
 import { session } from "../ui/session.js";
 
@@ -38,7 +38,14 @@ export const input = {
 
 export interface SkillAim {
   slot: number;
-  /** 落點相對玩家的位移；手指還在中央（快速施放）時為 null。 */
+  /** 這個技能怎麼瞄準（不會是 self：那種按下就直接放）。 */
+  shape: Exclude<AimShape, { kind: "self" }>;
+  /** 落點技能的作用半徑（已套用進化效果）。 */
+  radius: number;
+  /**
+   * 指示相對玩家的位移：落點技能是落點，方向技能是箭頭的尖端。
+   * 手指還在中央（快速施放）時為 null。
+   */
   offset: { x: number; z: number } | null;
   /** 手指正停在取消區上，放開就不施放。 */
   cancel: boolean;
@@ -52,20 +59,36 @@ const AIM_RADIUS = 95;
 let bound: Pick<InputActions, "world" | "playerCast"> | null = null;
 
 /**
- * 觸控時按住技能按鈕：點一下照自動瞄準快速施放；按住拖曳則手動指定落點，
- * 方向與距離跟著手指相對按下位置的位移（畫面往右是 +X、往下是 +Z，
- * 鏡頭沒有轉向，兩者剛好對齊）；放開時手指停在取消區上就不施放。
+ * 觸控時按住技能按鈕：點一下照自動瞄準快速施放；按住拖曳則手動瞄準，
+ * 跟著手指相對按下位置的位移（畫面往右是 +X、往下是 +Z，鏡頭沒有轉向，
+ * 兩者剛好對齊）；放開時手指停在取消區上就不施放。
+ *
+ * 依技能的瞄準方式（SKILL_AIM）：以自己為中心的技能按下就放；方向技能只取
+ * 方向；落點技能連距離一起取。
  *
  * 給輕度玩家：不拖就跟以前一樣，拖曳是需要精準方向時才用的進階操作。
  */
 export function beginSkillAim(slot: number, e: PointerEvent, button: HTMLElement) {
   if (!bound || input.skillAim || session.state !== "playing") return;
   const actions = bound;
+  const caster = actions.world.player;
+  if (!caster) return;
+  const shape = SKILL_AIM[caster.hero][slot];
+  if (shape.kind === "self") {
+    actions.playerCast(slot);
+    return;
+  }
   const id = e.pointerId,
     x0 = e.clientX,
     y0 = e.clientY;
   const cancelZone = $("aimCancel");
-  const state: SkillAim = { slot, offset: null, cancel: false };
+  const state: SkillAim = {
+    slot,
+    shape,
+    radius: shape.kind === "point" ? shape.radius(caster.mods) : 0,
+    offset: null,
+    cancel: false,
+  };
   input.skillAim = state;
   button.setPointerCapture(id);
   button.classList.add("aiming");
@@ -80,7 +103,8 @@ export function beginSkillAim(slot: number, e: PointerEvent, button: HTMLElement
     state.cancel =
       ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
     cancelZone.classList.toggle("hot", state.cancel);
-    const reach = (Math.min(len, AIM_RADIUS) / AIM_RADIUS) * CAST_RANGE;
+    const reach =
+      shape.kind === "direction" ? shape.length : (Math.min(len, AIM_RADIUS) / AIM_RADIUS) * CAST_RANGE;
     state.offset = len < AIM_DEADZONE ? null : { x: (dx / len) * reach, z: (dy / len) * reach };
   };
   let done = false;
@@ -95,10 +119,10 @@ export function beginSkillAim(slot: number, e: PointerEvent, button: HTMLElement
     input.skillAim = null;
     if (ev.type !== "pointerup" || !active || state.cancel) return;
     const player = actions.world.player;
-    actions.playerCast(
-      slot,
-      state.offset && player ? { x: player.x + state.offset.x, z: player.z + state.offset.z } : undefined,
-    );
+    if (!state.offset || !player) return actions.playerCast(slot);
+    // 往後移動的技能：手指拖的是要去的方向，瞄準方向剛好相反。
+    const sign = shape.kind === "direction" && shape.flip ? -1 : 1;
+    actions.playerCast(slot, { x: player.x + sign * state.offset.x, z: player.z + sign * state.offset.z });
   };
   const handlers: [string, (ev: PointerEvent) => void][] = [
     ["pointermove", track],

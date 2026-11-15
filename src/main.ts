@@ -587,7 +587,9 @@ aimRing.rotation.x = -Math.PI / 2;
 scene.add(aimRing);
 
 /**
- * 觸控拖曳技能時的地面指示：施放範圍的外圈、從角色拉到落點的線，以及落點的圈。
+ * 觸控拖曳技能時的地面指示，依技能的瞄準方式：
+ * - 落點技能：施放範圍的外圈、從角色拉到落點的線、落點上技能實際的作用範圍。
+ * - 方向技能：一支固定長度的箭頭（衝刺距離或射程）。
  * 手指停在取消區上時變成紅色。
  */
 const castIndicator = new THREE.Group();
@@ -607,9 +609,13 @@ const flat = (geometry: THREE.BufferGeometry) => {
   castIndicator.add(m);
   return m;
 };
-flat(new THREE.RingGeometry(CAST_RANGE - 0.22, CAST_RANGE, 64));
+const castRange = flat(new THREE.RingGeometry(CAST_RANGE - 0.22, CAST_RANGE, 64));
 const castLine = flat(new THREE.PlaneGeometry(0.4, 1).translate(0, 0.5, 0));
-const castTarget = flat(new THREE.RingGeometry(1.1, 1.55, 32));
+// 半徑 1 的圈，依技能的作用範圍縮放
+const castTarget = flat(new THREE.RingGeometry(0.9, 1, 48));
+const castArrow = flat(
+  new THREE.ShapeGeometry(new THREE.Shape([new THREE.Vector2(-0.6, 0), new THREE.Vector2(0.6, 0), new THREE.Vector2(0, 1)])),
+);
 castIndicator.visible = false;
 scene.add(castIndicator);
 
@@ -620,14 +626,26 @@ function drawCastIndicator() {
   if (!castIndicator.visible || !aim || !player) return;
   castIndicator.position.set(player.x, 0.18, player.z);
   castColor.color.setHex(aim.cancel ? 0xe0705f : 0xecd096);
-  castLine.visible = castTarget.visible = !!aim.offset;
+  const point = aim.shape.kind === "point";
+  castRange.visible = point;
+  castLine.visible = !!aim.offset;
+  castTarget.visible = point && !!aim.offset;
+  castArrow.visible = !point && !!aim.offset;
   if (!aim.offset) return;
   const { x, z } = aim.offset;
   const length = Math.hypot(x, z);
-  // 線的幾何沿 -Z 擺放；轉 θ + π 之後指向 (sin θ, cos θ)。
-  castLine.rotation.y = Math.atan2(x, z) + Math.PI;
-  castLine.scale.set(1, 1, length);
-  castTarget.position.set(x, 0, z);
+  // 線與箭頭的幾何沿 -Z 擺放；轉 θ + π 之後指向 (sin θ, cos θ)。
+  const heading = Math.atan2(x, z) + Math.PI;
+  castLine.rotation.y = castArrow.rotation.y = heading;
+  if (point) {
+    castLine.scale.set(1, 1, length);
+    castTarget.position.set(x, 0, z);
+    castTarget.scale.setScalar(aim.radius);
+  } else {
+    // 箭頭的尖端剛好落在衝刺終點或射程盡頭
+    castLine.scale.set(1, 1, Math.max(0, length - 1));
+    castArrow.position.set((x / length) * (length - 1), 0, (z / length) * (length - 1));
+  }
 }
 function frame(now: number) {
   requestAnimationFrame(frame);

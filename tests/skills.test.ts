@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aimDirection, attack, cast } from "../src/core/skills.js";
+import { aimDirection, attack, cast, SKILL_AIM } from "../src/core/skills.js";
 import { HEROES } from "../src/data/heroes.js";
 import { drained, makeField, makeWorld, spawn, typesOf } from "./fixtures.js";
 
@@ -313,5 +313,47 @@ describe("各英雄的技能效果", () => {
     run();
     expect(world.zones[0].stun).toBe(2);
     expect(hero.shield).toBe(250);
+  });
+});
+
+describe("觸控拖曳的瞄準方式", () => {
+  it("每位英雄的 Q／E／R 都有瞄準方式", () => {
+    expect(SKILL_AIM).toHaveLength(HEROES.length);
+    for (const shapes of SKILL_AIM) expect(shapes).toHaveLength(3);
+  });
+
+  it("落點技能的指示半徑就是技能實際的作用範圍", () => {
+    for (const [hero, slot] of [[1, 2], [2, 1], [2, 2]] as const) {
+      for (const mega of [false, true]) {
+        const world = makeWorld({ autoAim: true });
+        const caster = spawn(world, "hero", 0, { hero, isPlayer: true, mods: { mega } });
+        world.castAim = { x: 0, z: 6 };
+        cast(world, field, caster, slot);
+        const shape = SKILL_AIM[hero][slot];
+        expect(shape.kind).toBe("point");
+        if (shape.kind === "point") expect(world.zones[0].r).toBe(shape.radius(caster.mods));
+      }
+    }
+  });
+
+  it("方向技能的箭頭長度就是實際的衝刺距離", () => {
+    for (const [hero, slot] of [[0, 0], [3, 0]] as const) {
+      const world = makeWorld({ autoAim: true });
+      const caster = spawn(world, "hero", 0, { hero, isPlayer: true });
+      world.castAim = { x: 10, z: 0 };
+      cast(world, field, caster, slot);
+      const shape = SKILL_AIM[hero][slot];
+      if (shape.kind === "direction") expect(caster.x).toBeCloseTo(shape.length, 6);
+    }
+  });
+
+  it("靈巧翻滾往瞄準的反方向滾", () => {
+    const world = makeWorld({ autoAim: true });
+    const archer = spawn(world, "hero", 0, { hero: 1, isPlayer: true });
+    world.castAim = { x: 10, z: 0 };
+    cast(world, field, archer, 1);
+    const shape = SKILL_AIM[1][1];
+    expect(shape.kind === "direction" && shape.flip).toBe(true);
+    if (shape.kind === "direction") expect(archer.x).toBeCloseTo(-shape.length, 6);
   });
 });
