@@ -169,7 +169,11 @@ function startGame(h: number) {
   $("overlay").classList.add("hidden");
   resetInput();
   resumeAudio();
-  announce("戰鬥開始！右鍵或 WASD 移動，左鍵普通攻擊。");
+  announce(
+    coarse
+      ? "戰鬥開始！左側搖桿移動，點普攻攻擊附近的敵人。"
+      : "戰鬥開始！右鍵或 WASD 移動，左鍵普通攻擊。",
+  );
   return { hero: HEROES[h].name, state: session.state };
 }
 function resume() {

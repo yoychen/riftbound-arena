@@ -919,6 +919,68 @@ kbd {
     touch-action: none;
   }
 }
+/* 觸控沒有滑鼠與鍵盤，底部的操作說明只會誤導。 */
+@media (pointer: coarse) {
+  .control-hint {
+    display: none;
+  }
+}
+/*
+ * 橫拿的手機：畫面很矮（約 360–430px），直式的排法會讓搖桿蓋住目標面板、
+ * 普攻按鈕蓋住小地圖。改成：搖桿在左下角、技能列往右讓開、普攻在右側
+ * 技能列上方、小地圖縮小放右上、目標面板只留標題與巨獸倒數。
+ */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
+  #touchMove {
+    left: max(18px, env(safe-area-inset-left, 0px));
+    bottom: 16px;
+  }
+  #hud {
+    left: calc(max(18px, env(safe-area-inset-left, 0px)) + 116px);
+    bottom: 10px;
+    transform: none;
+  }
+  #touchAttack {
+    right: max(22px, env(safe-area-inset-right, 0px));
+    bottom: 110px;
+    width: 60px;
+    height: 60px;
+  }
+  .map-panel {
+    top: 72px;
+    bottom: auto;
+    right: max(14px, env(safe-area-inset-right, 0px));
+    width: 132px;
+    padding: 8px;
+  }
+  .map-panel p {
+    display: none;
+  }
+  .objective {
+    top: 72px;
+    width: 172px;
+    padding: 10px 12px;
+  }
+  .objective p {
+    display: none;
+  }
+  .objective h3 {
+    font-size: 15px;
+    margin: 2px 0 6px;
+  }
+}
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 380px) {
+  .map-panel {
+    width: 120px;
+  }
+}
+/* 頂部列在 800px 以下比較矮，面板可以再往上一點 */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) and (max-width: 800px) {
+  .map-panel,
+  .objective {
+    top: 60px;
+  }
+}
 @media (max-width: 480px) {
   .brand .sigil,
   .brand small {
