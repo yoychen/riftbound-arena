@@ -15,6 +15,11 @@ export type Waveform = "sine" | "square" | "sawtooth" | "triangle";
 export type GameEvent =
   /** 地面擴散光環。 */
   | { type: "ring"; x: number; z: number; r: number; color: number; life: number }
+  /**
+   * 近戰揮砍的刀光。angle 是面向（atan2(dx, dz)），r 是攻擊距離，
+   * height 是揮砍的高度（英雄比小兵高）。
+   */
+  | { type: "slash"; x: number; z: number; angle: number; r: number; color: number; height: number }
   /** 粒子爆散。 */
   | { type: "burst"; x: number; z: number; color: number; count: number }
   /** 跳出的傷害數字。只在玩家出手或受擊時產生。 */

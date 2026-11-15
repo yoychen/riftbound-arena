@@ -19,7 +19,6 @@ import {
   renderer,
   scene,
   screen,
-  sphere,
   W,
   H,
 } from "./render/renderer.js";
@@ -41,9 +40,18 @@ import {
   modelOf,
   unitModel,
   worldEntities,
-  zoneMesh,
 } from "./render/models.js";
-import { clearEffects, playBurst, playRing, stepEffects } from "./render/effects.js";
+import { clearEffects, playRing, stepEffects } from "./render/effects.js";
+import {
+  clearFx,
+  playHit,
+  playSlash,
+  projectileModel,
+  stepFx,
+  updateProjectileModel,
+  updateZoneModel,
+  zoneModel,
+} from "./render/fx.js";
 import {
   clearFloaters,
   drawLabels,
@@ -101,8 +109,10 @@ function handleEvent(event: GameEvent) {
   switch (event.type) {
     case "ring":
       return playRing(event.x, event.z, event.r, event.color, event.life);
+    case "slash":
+      return playSlash(event.x, event.z, event.angle, event.r, event.color, event.height);
     case "burst":
-      return playBurst(event.x, event.z, event.color, event.count);
+      return playHit(event.x, event.z, event.color, Math.min(event.count, 8));
     case "damage":
       return showDamageNumber(event.x, event.z, event.text, event.color);
     case "playerDeath":
@@ -156,6 +166,7 @@ function clearBattle() {
   world.projectiles = [];
   world.zones = [];
   clearEffects();
+  clearFx();
   clearFloaters();
 }
 function setupBattle(hero: number) {
@@ -538,20 +549,23 @@ function update(dt: number) {
  * 一律在這裡推導。這道單向性是把遊戲邏輯與 THREE 分開的前提：邏輯不再需要
  * 持有 Object3D，也就能在沒有 WebGL 的環境裡執行與測試。
  */
-/** 區域圓盤是單一網格，不是群組。 */
-const zoneDisc = (z: { model?: unknown }) => z.model as THREE.Mesh;
 
 function syncModels(dt: number) {
   // 模擬只描述投射物與區域的位置與外觀參數，模型在這裡按需建立。
+  const animate = session.state === "playing";
   for (const p of world.projectiles) {
-    if (!p.model)
-      p.model = sphere(p.big ? 0.34 : 0.18, p.color, p.x, 1.15, p.z, scene);
-    modelOf(p).position.set(p.x, 1.1, p.z);
+    if (!p.model) {
+      p.model = projectileModel(p);
+      scene.add(modelOf(p));
+    }
+    updateProjectileModel(modelOf(p), p, dt);
   }
   for (const z of world.zones) {
-    if (!z.model) z.model = zoneMesh(z.x, z.z, z.r, z.color);
-    (zoneDisc(z).material as THREE.Material).opacity =
-      z.tick > 0 ? 0.12 : 0.35;
+    if (!z.model) {
+      z.model = zoneModel(z);
+      scene.add(modelOf(z));
+    }
+    updateZoneModel(modelOf(z), z, dt, animate);
   }
   for (const e of world.entities) {
     modelOf(e).visible = e.hp > 0;
@@ -678,6 +692,10 @@ function frame(now: number) {
     (world.player?.hp ?? 0) > 0;
   aimRing.position.set(input.aim.x, 0.17, input.aim.z);
   drawCastIndicator();
+  // 光環、粒子與戰鬥特效：戰鬥中與結算畫面繼續播，暫停、商店時凍結。
+  const animateFx = session.state === "playing" || session.state === "ended";
+  stepEffects(dt, animateFx);
+  stepFx(dt, animateFx);
   renderer.render(scene, camera);
   drawLabels(world, session.state);
   drawMap(world, session.state);

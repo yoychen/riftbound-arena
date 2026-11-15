@@ -150,6 +150,12 @@ export interface Projectile extends Point {
 }
 
 /** 地面上的持續傷害區域。 */
+/**
+ * 技能範圍的特效種類，只影響畫面：落雷、流星、火星、繞身的刀光、震地。
+ * 沒填就是一般的範圍。
+ */
+export type ZoneFx = "thunder" | "meteor" | "flame" | "storm" | "quake";
+
 export interface Zone extends Point {
   r: number;
   /** 剩餘存在時間。 */
@@ -166,6 +172,7 @@ export interface Zone extends Point {
   color: number;
   slow: number;
   stun: number;
+  fx?: ZoneFx;
   model?: unknown;
 }
 

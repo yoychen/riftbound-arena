@@ -492,24 +492,6 @@ function unitModel(type: string, team: number, hero = 0): THREE.Group {
  * 模擬層從不讀取 `model`。
  */
 
-/** 區域傷害的地面圓盤。模擬只給座標、半徑與顏色。 */
-function zoneMesh(x: number, z: number, r: number, color: number) {
-  const m = new THREE.Mesh(
-    new THREE.CircleGeometry(r, 40),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.19,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.position.set(x, 0.12, z);
-  scene.add(m);
-  return m;
-}
-
 /**
  * 釋放一個模型佔用的 GPU 資源。
  *
@@ -539,4 +521,4 @@ export function modelOf(carrier: { model?: unknown }): THREE.Object3D {
   return carrier.model as THREE.Object3D;
 }
 
-export { worldEntities, unitModel, zoneMesh };
+export { worldEntities, unitModel };

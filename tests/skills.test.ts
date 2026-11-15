@@ -357,3 +357,34 @@ describe("觸控拖曳的瞄準方式", () => {
     if (shape.kind === "direction") expect(archer.x).toBeCloseTo(-shape.length, 6);
   });
 });
+
+describe("戰鬥特效的事件", () => {
+  it("近戰普攻送出朝向面前的刀光，打到的敵人各有一次命中火花", () => {
+    const world = makeWorld({ aim: { x: 10, z: 0 }, autoAim: false });
+    const hero = spawn(world, "hero", 0, { isPlayer: true });
+    spawn(world, "minion", 1, { x: 2, hp: 300, maxHp: 300 });
+    spawn(world, "minion", 1, { x: 2, z: 1, hp: 300, maxHp: 300 });
+    attack(world, hero);
+    const events = drained(world);
+    const slash = events.find((e) => e.type === "slash");
+    expect(slash && slash.type === "slash" && slash.angle).toBeCloseTo(Math.PI / 2, 6);
+    expect(events.filter((e) => e.type === "burst")).toHaveLength(2);
+  });
+
+  it("各技能的範圍帶著對應的特效種類", () => {
+    const cases = [
+      [0, 2, "storm"],
+      [1, 2, "meteor"],
+      [2, 1, "flame"],
+      [2, 2, "thunder"],
+      [3, 1, "quake"],
+      [3, 2, "quake"],
+    ] as const;
+    for (const [hero, slot, fx] of cases) {
+      const world = makeWorld({ aim: { x: 0, z: 6 }, autoAim: false });
+      const caster = spawn(world, "hero", 0, { hero, isPlayer: true });
+      cast(world, field, caster, slot);
+      expect(world.zones[0].fx).toBe(fx);
+    }
+  });
+});

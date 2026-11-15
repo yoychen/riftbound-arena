@@ -70,20 +70,25 @@ export function attack(world: World, entity: Entity): void {
   const range = entity.range;
 
   if (range < 6) {
+    const color = entity.team < 0 ? NEUTRAL_COLOR : TEAM_COLORS[entity.team];
     world.events.emit({
-      type: "ring",
-      x: entity.x + d.x * 1.4,
-      z: entity.z + d.z * 1.4,
-      r: range * 0.6,
-      color: entity.team < 0 ? NEUTRAL_COLOR : TEAM_COLORS[entity.team],
-      life: 0.18,
+      type: "slash",
+      x: entity.x,
+      z: entity.z,
+      angle: entity.facing,
+      r: range,
+      color,
+      height: entity.type === "minion" ? 0.65 : 1.05,
     });
     // 近戰是一個朝向面前的扇形，背後的敵人打不到。
     for (const target of enemies(world, entity, range + 1)) {
       const facingness =
         ((target.x - entity.x) * d.x + (target.z - entity.z) * d.z) /
         (dist(entity, target) || 1);
-      if (facingness > -0.1) damage(world, target, entity.damage, entity);
+      if (facingness > -0.1) {
+        damage(world, target, entity.damage, entity);
+        world.events.emit({ type: "burst", x: target.x, z: target.z, color, count: 4 });
+      }
     }
     if (mods.blade)
       shoot(world, entity, d, {
@@ -172,7 +177,7 @@ const mirrorGuard: Skill = ({ world, caster }) => {
 
 /** 千刃風暴：以自身為中心的持續傷害，期間保有減傷。 */
 const bladeStorm: Skill = ({ world, caster, hero, mods }) => {
-  addZone(world, caster.x, caster.z, mods.mega ? 9 : 6, 3.2, caster, 100, hero.color, 0.1);
+  addZone(world, caster.x, caster.z, mods.mega ? 9 : 6, 3.2, caster, 100, hero.color, 0.1, 0, 0, "storm");
   caster.guard = 1.2;
 };
 
@@ -198,7 +203,7 @@ const nimbleRoll: Skill = ({ world, field, caster, d, mods }) => {
 
 /** 流星箭雨：指定地點的持續轟炸，附帶緩速。 */
 const meteorVolley: Skill = ({ world, caster, target, mods }) => {
-  addZone(world, target.x, target.z, meteorRadius(mods), 4, caster, 95, 0xe9cc7d, 0.55, 0.6);
+  addZone(world, target.x, target.z, meteorRadius(mods), 4, caster, 95, 0xe9cc7d, 0.55, 0.6, 0, "meteor");
 };
 
 // ── 暮光法師 ────────────────────────────────────────────────────
@@ -218,12 +223,12 @@ const frostOrb: Skill = ({ world, caster, d, mods }) => {
 
 /** 烈焰印記：短延遲的高爆發，打在走不掉的目標身上。 */
 const flameBrand: Skill = ({ world, caster, target, mods }) => {
-  addZone(world, target.x, target.z, flameRadius(mods), 1, caster, 235, 0xfa9870, 0.7);
+  addZone(world, target.x, target.z, flameRadius(mods), 1, caster, 235, 0xfa9870, 0.7, 0, 0, "flame");
 };
 
 /** 雷霆領域：持續落雷並緩速。 */
 const thunderDomain: Skill = ({ world, caster, target, mods }) => {
-  addZone(world, target.x, target.z, thunderRadius(mods), 4.5, caster, 100, 0xc1a1ff, 0.3, 0.8);
+  addZone(world, target.x, target.z, thunderRadius(mods), 4.5, caster, 100, 0xc1a1ff, 0.3, 0.8, 0, "thunder");
 };
 
 // ── 磐石鬥士 ────────────────────────────────────────────────────
@@ -242,12 +247,12 @@ const landslide: Skill = ({ world, field, caster, d, hero }) => {
 /** 震地護盾：厚護盾加上一圈短暫的緩速。 */
 const quakeShield: Skill = ({ world, caster, hero, mods }) => {
   caster.shield = (caster.shield) + 300 + (mods.fortress ? 200 : 0);
-  addZone(world, caster.x, caster.z, 4.8, 0.4, caster, 100, hero.color, 0.1, 2);
+  addZone(world, caster.x, caster.z, 4.8, 0.4, caster, 100, hero.color, 0.1, 2, 0, "quake");
 };
 
 /** 大地崩裂：範圍暈眩與重擊，同時給自己護盾。 */
 const earthshatter: Skill = ({ world, caster, mods }) => {
-  addZone(world, caster.x, caster.z, mods.mega ? 10 : 7, 0.8, caster, 340, 0xf9bd84, 0.45, 0, 2);
+  addZone(world, caster.x, caster.z, mods.mega ? 10 : 7, 0.8, caster, 340, 0xf9bd84, 0.45, 0, 2, "quake");
   caster.shield = (caster.shield) + 250;
 };
 

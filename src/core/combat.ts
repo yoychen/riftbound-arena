@@ -9,7 +9,7 @@
 import { TEAM_COLORS } from "../config/colors.js";
 import { HEROES } from "../data/heroes.js";
 import { clamp, dist, type Point } from "./vec.js";
-import type { Entity, World } from "./world.js";
+import type { Entity, World, ZoneFx } from "./world.js";
 
 /** 小兵擊殺的金幣與經驗分享半徑。 */
 const SHARE_RANGE = 22;
@@ -316,6 +316,7 @@ export function addZone(
   delay = 0.7,
   slow = 0,
   stun = 0,
+  fx?: ZoneFx,
 ): void {
   const px = clamp(x, -44, 44);
   const pz = clamp(z, -36, 36);
@@ -332,6 +333,7 @@ export function addZone(
     color,
     slow,
     stun,
+    fx,
   });
   world.events.emit({
     type: "ring",
