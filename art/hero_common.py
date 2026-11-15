@@ -147,10 +147,13 @@ def star_outline(r_out, r_in, points=5):
     ]
 
 
-def finish_hero(name, parts, tints, bright=(), joints=None, actions=None):
+def finish_hero(name, parts, tints, bright=(), joints=None, actions=None, vertex_colors=None):
     """
     寫入明暗、建立物件、匯出 .glb，有設 HERO_PREVIEW 時另外渲染預覽圖。
     bright 裡的部位（金屬、發光物）明暗漸層比較淡。
+
+    vertex_colors：{部位: {BMVert: (r, g, b)}}，讓這些部位的頂點色直接帶顏色
+    （小兵為了少一次繪製才這樣做，見 build_minion.py）。
 
     綁骨架的英雄另外傳 joints（rig.humanoid 的結果）與 actions(骨架物件)：
     actions 建好每個動作並回傳 [(動作, 預覽影格)]；設 HERO_ANIM_PREVIEW 時把
@@ -160,6 +163,15 @@ def finish_hero(name, parts, tints, bright=(), joints=None, actions=None):
     for part, bm in parts.items():
         dark = 0.9 if part in bright else SHADE_DARK
         shade_by_height(bm, SHADE_LOW, SHADE_HIGH, dark, 1.0)
+        if vertex_colors and part in vertex_colors:
+            # 例外：這個部位的頂點色直接帶顏色（{BMVert: (r, g, b)}），乘在明暗上。
+            rgb_of = vertex_colors[part]
+            layer = bm.loops.layers.color["Col"]
+            for face in bm.faces:
+                for loop in face.loops:
+                    r, g, b = rgb_of[loop.vert]
+                    shade = loop[layer][0]
+                    loop[layer] = (shade * r, shade * g, shade * b, 1.0)
         if joints:
             rig.check_bound(part, bm)
         objects.append(finish(bm, part, groups=rig.BONES if joints else None))

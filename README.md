@@ -56,6 +56,7 @@ npm run smoke:touch # 觸控裝置的冒煙檢查（搖桿、觸控普攻）
 blender --background --factory-startup --python art/build_tree.py
 blender --background --factory-startup --python art/build_rock.py
 blender --background --factory-startup --python art/build_hero_swordsman.py  # 另有 _archer、_mage、_fighter
+blender --background --factory-startup --python art/build_minion.py
 ```
 
 沒有 Blender 也可以 `pip install bpy==5.2.4`，改用 `python art/build_<名稱>.py` 執行。英雄腳本設 `HERO_PREVIEW=<路徑>.png` 會另外渲染一張多視角預覽圖（Cycles，CPU 即可）。四位英雄都綁了骨架（骨架與動作工具在 `art/rig.py`），另可設 `HERO_ANIM_PREVIEW=<路徑>.png` 渲染動作檢查圖。
