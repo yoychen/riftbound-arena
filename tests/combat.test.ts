@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { damage, kill } from "../src/core/combat.js";
+import { damage } from "../src/core/combat.js";
 import { drained, makeWorld, spawn, typesOf } from "./fixtures.js";
 
 describe("傷害結算", () => {

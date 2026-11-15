@@ -8,26 +8,12 @@
  * 之後可以再抽成 core/match.ts。
  */
 import * as THREE from "three";
-import {
-  $,
-  box,
-  camera,
-  cyl,
-  labelCtx as ctx,
-  mapCtx as mapctx,
-  mesh,
-  renderer,
-  scene,
-  screen,
-  W,
-  H,
-} from "./render/renderer.js";
+import { $, camera, renderer, scene } from "./render/renderer.js";
 import {
   bases,
   curves,
   lanePoints,
   obstacles,
-  river,
   teamColors,
 } from "./render/terrain.js";
 import { session } from "./ui/session.js";
@@ -62,21 +48,19 @@ import { drawMap } from "./render/minimap.js";
 import { clearFeed, showAnnounce, showFeed, tickToast } from "./ui/feed.js";
 import { playTone, resumeAudio, toggleMute } from "./ui/audio.js";
 import { HEROES } from "./data/heroes.js";
-import { commonUpgrades, heroUpgrades } from "./data/evolutions.js";
-import { clamp, clock, dist, rand } from "./core/vec.js";
+import { clamp, dist, rand } from "./core/vec.js";
 import { createNavigation } from "./core/navigation.js";
 import type { GameEvent, Waveform } from "./core/events.js";
 import type { Point } from "./core/vec.js";
 import type { Entity } from "./core/world.js";
 import { createWorld } from "./core/world.js";
 import { createUnit } from "./core/entities.js";
-import { enemies, targetFor } from "./core/targeting.js";
-import { addZone, damage, kill, shoot } from "./core/combat.js";
-import { dash, move } from "./core/movement.js";
+import { enemies } from "./core/targeting.js";
+import { damage } from "./core/combat.js";
+import { move } from "./core/movement.js";
 import { aimDirection, attack, cast, CAST_RANGE } from "./core/skills.js";
 import { ai } from "./core/ai.js";
 import { stepProjectiles } from "./core/projectiles.js";
-import { TEAM_COLORS } from "./config/colors.js";
 
 /** 這一局的模擬狀態。特效、鏡頭、音訊與 UI 狀態機不在裡面。 */
 const world = createWorld();
@@ -93,8 +77,6 @@ const coarse = input.coarse;
 const events = world.events;
 const ringFx = (x: number, z: number, r: number, color: number, life = 0.45) =>
   events.emit({ type: "ring", x, z, r, color, life });
-const damageNumber = (x: number, z: number, text: number, color: string) =>
-  events.emit({ type: "damage", x, z, text, color });
 const announce = (text: string) => events.emit({ type: "announce", text });
 const feed = (text: string) => events.emit({ type: "feed", text });
 const tone = (
@@ -696,6 +678,9 @@ function frame(now: number) {
   const animateFx = session.state === "playing" || session.state === "ended";
   stepEffects(dt, animateFx);
   stepFx(dt, animateFx);
+  // 傷害數字只在戰鬥中往上飄、消失；提示訊息到時間就收起。
+  stepFloaters(dt, session.state === "playing");
+  tickToast();
   renderer.render(scene, camera);
   drawLabels(world, session.state);
   drawMap(world, session.state);

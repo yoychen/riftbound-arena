@@ -13,7 +13,6 @@ import { clock, dist } from "../core/vec.js";
 import { resumeAudio } from "./audio.js";
 import type { Point } from "../core/vec.js";
 import type { World } from "../core/world.js";
-import type { Upgrade } from "../data/evolutions.js";
 import { $ } from "../render/renderer.js";
 import { session } from "./session.js";
 

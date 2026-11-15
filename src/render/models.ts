@@ -340,7 +340,7 @@ function unitModel(type: string, team: number, hero = 0): THREE.Group {
   } else if (type === "hero") {
     const h = HEROES[hero],
       bulky = hero === 3;
-    const body = cyl(
+    cyl(
       bulky ? 0.78 : 0.48,
       bulky ? 0.85 : 0.6,
       1.2,
@@ -351,7 +351,7 @@ function unitModel(type: string, team: number, hero = 0): THREE.Group {
       root,
       6,
     );
-    const head = sphere(0.43, 0xe4c9a0, 0, 2.02, 0, root, 1);
+    sphere(0.43, 0xe4c9a0, 0, 2.02, 0, root, 1);
     box(0.67, 0.18, 0.68, hero === 2 ? 0x7d65ab : 0x324e4c, 0, 2.25, 0, root);
     box(0.28, 0.62, 0.34, 0x294343, -0.29, 0.35, 0, root);
     box(0.28, 0.62, 0.34, 0x294343, 0.29, 0.35, 0, root);
