@@ -231,6 +231,16 @@ export interface World {
    * 此時沒有有意義的游標位置可用。
    */
   autoAim: boolean;
+  /**
+   * 玩家目前的移動輸入方向（搖桿或 WASD，單位向量），沒有輸入時為 0。
+   * 自動瞄準時閃避朝這個方向，而不是朝鎖定的敵人。
+   */
+  moveInput: Point;
+  /**
+   * 觸控時按住技能按鈕拖曳指定的落點。只在那一次施放期間有值，
+   * 施放完立刻清掉；有值時技能朝它施放，優先於自動瞄準。
+   */
+  castAim: Point | null;
 }
 
 export function createWorld(): World {
@@ -262,5 +272,7 @@ export function createWorld(): World {
     movePath: [],
     aim: { x: 0, z: 0 },
     autoAim: false,
+    moveInput: { x: 0, z: 0 },
+    castAim: null,
   };
 }

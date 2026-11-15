@@ -103,6 +103,49 @@ const cooling = await page.evaluate(() =>
 );
 check("點擊技能格會進入冷卻", cooling);
 
+// 按住技能格拖曳瞄準。page.mouse 送的是滑鼠事件，要用 CDP 送真的觸控，
+// 瀏覽器才會產生 pointerType 為 touch 的指標事件。
+const cdp = await context.newCDPSession(page);
+const touch = (type, x, y) =>
+  cdp.send("Input.dispatchTouchEvent", {
+    type,
+    touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 7 }],
+  });
+const slotCooling = (slot) =>
+  page.evaluate(
+    (slot) => document.querySelectorAll(".cool")[slot].style.display === "grid",
+    slot,
+  );
+async function dragSkill(slot, to) {
+  const box = await page.locator(`[data-skill="${slot}"]`).boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await touch("touchStart", x, y);
+  await page.waitForTimeout(50);
+  const target = await to(x, y); // 取消區要按下之後才出現，量位置要在這之後
+  for (let i = 1; i <= 6; i++)
+    await touch("touchMove", x + ((target.x - x) * i) / 6, y + ((target.y - y) * i) / 6);
+  await page.waitForTimeout(200);
+  const during = await page.evaluate(() => ({
+    cancel: document.getElementById("aimCancel").className,
+    aiming: !!document.querySelector(".skill.aiming"),
+  }));
+  await touch("touchEnd", target.x, target.y);
+  await page.waitForTimeout(400);
+  return during;
+}
+
+const aimed = await dragSkill(1, (x, y) => ({ x: x - 90, y: y - 60 }));
+check("拖曳技能時出現瞄準狀態與取消區", aimed.aiming && /show/.test(aimed.cancel), aimed.cancel);
+check("拖曳後放開會施放技能", await slotCooling(1));
+
+const cancelled = await dragSkill(2, async () => {
+  const zone = await page.locator("#aimCancel").boundingBox();
+  return { x: zone.x + zone.width / 2, y: zone.y + zone.height / 2 };
+});
+check("拖到取消區時取消區會亮起", /hot/.test(cancelled.cancel), cancelled.cancel);
+check("在取消區放開不會施放", !(await slotCooling(2)));
+check("放開後取消區收起", !(await page.evaluate(() => document.getElementById("aimCancel").classList.contains("show"))));
+
 await browser.close();
 if (errors.length) {
   console.error("\n失敗：\n" + errors.join("\n"));

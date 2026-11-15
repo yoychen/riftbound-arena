@@ -18,8 +18,8 @@ import type { Entity, Mods, World } from "./world.js";
 
 /** 自動選敵與技能瞄準的最大距離。 */
 const AIM_RANGE = 18;
-/** 技能落點離施放者的上限。 */
-const CAST_RANGE = 13;
+/** 技能落點離施放者最遠的距離。觸控拖曳瞄準的最大距離也是它。 */
+export const CAST_RANGE = 13;
 /** 沒有明確落點時，預設打在正前方這個距離。 */
 const DEFAULT_CAST_DISTANCE = 8;
 /** 閃避（第四個技能槽）的位移與冷卻。 */
@@ -33,9 +33,12 @@ const DODGE = { length: 5.5, cooldown: 4.5 };
  */
 export function aimDirection(world: World, entity: Entity): Point {
   if (entity.isPlayer) {
+    if (world.castAim) return { x: world.castAim.x - entity.x, z: world.castAim.z - entity.z };
     if (world.autoAim) {
       const target = targetFor(world, entity, AIM_RANGE);
       if (target) return { x: target.x - entity.x, z: target.z - entity.z };
+      // 觸控沒有游標：附近沒有敵人就朝目前的面向，不能拿游標的舊位置。
+      return { x: Math.sin(entity.facing), z: Math.cos(entity.facing) };
     }
     return { x: world.aim.x - entity.x, z: world.aim.z - entity.z };
   }
@@ -261,15 +264,24 @@ export function cast(
   if (caster.hp <= 0 || cd[slot] > 0 || (caster.stun) > 0) return;
 
   const hero = HEROES[caster.hero];
-  const d = normalize(aimDirection(world, caster));
+  let d = normalize(aimDirection(world, caster));
+  // 自動瞄準（觸控）時閃避是為了躲：朝搖桿推的方向，沒推就朝面向，不朝鎖定的敵人。
+  if (slot === 3 && caster.isPlayer && world.autoAim && !world.castAim) {
+    const m = world.moveInput;
+    d = Math.hypot(m.x, m.z) > 0
+      ? normalize(m)
+      : { x: Math.sin(caster.facing), z: Math.cos(caster.facing) };
+  }
 
   const requested =
-    caster.isPlayer && !world.autoAim
-      ? world.aim
-      : {
-          x: caster.x + d.x * DEFAULT_CAST_DISTANCE,
-          z: caster.z + d.z * DEFAULT_CAST_DISTANCE,
-        };
+    caster.isPlayer && world.castAim
+      ? world.castAim
+      : caster.isPlayer && !world.autoAim
+        ? world.aim
+        : {
+            x: caster.x + d.x * DEFAULT_CAST_DISTANCE,
+            z: caster.z + d.z * DEFAULT_CAST_DISTANCE,
+          };
   const target =
     dist(caster, requested) > CAST_RANGE
       ? { x: caster.x + d.x * CAST_RANGE, z: caster.z + d.z * CAST_RANGE }

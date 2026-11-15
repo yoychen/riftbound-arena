@@ -635,6 +635,35 @@ kbd {
 #touchAttack {
   display: none;
 }
+/* 觸控拖曳技能時才出現的取消區：手指拖到這裡放開就不施放。 */
+#aimCancel {
+  white-space: nowrap;
+  display: none;
+  position: absolute;
+  /* 畫面正上方：手指往上拖就到，不會蓋住小地圖或技能列 */
+  top: calc(env(safe-area-inset-top, 0px) + 74px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 14px 22px;
+  border: 1px solid #e0705f99;
+  border-radius: 999px;
+  background: #2a1714cc;
+  color: #f2c9bf;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 5;
+}
+#aimCancel.show {
+  display: block;
+}
+#aimCancel.hot {
+  background: #a5402fe6;
+  color: #fff;
+}
+.skill.aiming {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
 .error {
   position: absolute;
   inset: 30%;

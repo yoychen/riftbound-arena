@@ -25,10 +25,20 @@ describe("瞄準方向", () => {
     expect(unit(aimDirection(world, player))).toEqual({ x: 0, z: 1 });
   });
 
-  it("自動瞄準但附近沒有敵人時，退回游標方向", () => {
+  it("自動瞄準但附近沒有敵人時，朝目前的面向（觸控沒有游標可用）", () => {
+    const world = makeWorld({ aim: { x: 10, z: 0 }, autoAim: true });
+    const player = spawn(world, "hero", 0, { isPlayer: true, facing: Math.PI });
+    const d = unit(aimDirection(world, player));
+    expect(d.x).toBeCloseTo(0, 6);
+    expect(d.z).toBeCloseTo(-1, 6);
+  });
+
+  it("拖曳指定的落點優先於自動瞄準", () => {
     const world = makeWorld({ aim: { x: 10, z: 0 }, autoAim: true });
     const player = spawn(world, "hero", 0, { isPlayer: true });
-    expect(unit(aimDirection(world, player))).toEqual({ x: 1, z: 0 });
+    spawn(world, "minion", 1, { z: 5 });
+    world.castAim = { x: -6, z: 0 };
+    expect(unit(aimDirection(world, player))).toEqual({ x: -1, z: 0 });
   });
 
   it("AI 沒有目標時維持原本的面向", () => {
@@ -166,6 +176,33 @@ describe("技能施放的共通規則", () => {
     expect((hero.cd as number[])[3]).toBe(4.5);
     expect(hero.invuln).toBe(0.22);
     expect(hero.x).toBeCloseTo(5.5, 6);
+  });
+
+  it("自動瞄準時閃避朝移動輸入的方向，不朝鎖定的敵人", () => {
+    const world = makeWorld({ aim: { x: 10, z: 0 }, autoAim: true });
+    const hero = spawn(world, "hero", 0, { isPlayer: true });
+    spawn(world, "minion", 1, { x: 5 });
+    world.moveInput = { x: -1, z: 0 };
+    cast(world, field, hero, 3);
+    expect(hero.x).toBeCloseTo(-5.5, 6);
+  });
+
+  it("自動瞄準且沒有移動輸入時，閃避朝目前的面向", () => {
+    const world = makeWorld({ aim: { x: 10, z: 0 }, autoAim: true });
+    const hero = spawn(world, "hero", 0, { isPlayer: true, facing: 0 });
+    spawn(world, "minion", 1, { x: 5 });
+    cast(world, field, hero, 3);
+    expect(hero.x).toBeCloseTo(0, 6);
+    expect(hero.z).toBeCloseTo(5.5, 6);
+  });
+
+  it("拖曳指定的落點決定技能位置", () => {
+    const world = makeWorld({ aim: { x: 40, z: 0 }, autoAim: true });
+    const mage = spawn(world, "hero", 0, { hero: 2, isPlayer: true });
+    world.castAim = { x: 0, z: 6 };
+    cast(world, field, mage, 1); // 烈焰印記落在指定位置
+    expect(world.zones[0].x).toBeCloseTo(0, 6);
+    expect(world.zones[0].z).toBeCloseTo(6, 6);
   });
 
   it("施放會讓角色轉向目標方向", () => {

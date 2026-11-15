@@ -32,7 +32,7 @@ import {
   teamColors,
 } from "./render/terrain.js";
 import { session } from "./ui/session.js";
-import { bindInput, input, refreshAim } from "./input/index.js";
+import { beginSkillAim, bindInput, input, refreshAim } from "./input/index.js";
 import { buildSkills, updateHud } from "./ui/hud.js";
 import { createScreens } from "./ui/screens.js";
 import {
@@ -65,7 +65,7 @@ import { createUnit } from "./core/entities.js";
 import { enemies, targetFor } from "./core/targeting.js";
 import { addZone, damage, kill, shoot } from "./core/combat.js";
 import { dash, move } from "./core/movement.js";
-import { aimDirection, attack, cast } from "./core/skills.js";
+import { aimDirection, attack, cast, CAST_RANGE } from "./core/skills.js";
 import { ai } from "./core/ai.js";
 import { stepProjectiles } from "./core/projectiles.js";
 import { TEAM_COLORS } from "./config/colors.js";
@@ -192,7 +192,7 @@ function setupBattle(hero: number) {
   viewTarget.set(world.player.x, 0, world.player.z);
   $("evolutions").innerHTML = "";
   clearFeed();
-  buildSkills(world, playerCast);
+  buildSkills(world, playerCast, beginSkillAim);
   updateHud(world);
 }
 /**
@@ -244,7 +244,7 @@ const screens = createScreens({
   world,
   bases,
   setupBattle,
-  buildSkills: () => buildSkills(world, playerCast),
+  buildSkills: () => buildSkills(world, playerCast, beginSkillAim),
   updateHud: () => updateHud(world),
   claimBoss,
   resetInput,
@@ -261,9 +261,21 @@ const {
   endGame,
 } = screens;
 
-function playerCast(slot: number) {
+/**
+ * 觸控時攻擊或施法後，面向目標維持多久才轉回移動方向（秒）。
+ * 要涵蓋整段攻擊動作，揮砍才會朝著敵人。
+ */
+const FACE_TARGET_HOLD = 0.6;
+let faceTargetUntil = 0;
+
+/** 施放技能。aim 是觸控拖曳指定的落點；沒給就照滑鼠或自動瞄準。 */
+function playerCast(slot: number, aim?: { x: number; z: number }) {
   if (session.state !== "playing" || !world.player) return;
+  world.castAim = aim ?? null;
   cast(world, field, world.player, slot);
+  world.castAim = null;
+  // 閃避是為了躲開，不用轉回去面向敵人。
+  if (slot !== 3) faceTargetUntil = world.time + FACE_TARGET_HOLD;
 }
 function command(x = input.aim.x, z = input.aim.z) {
   if (session.state !== "playing") return;
@@ -445,9 +457,19 @@ function update(dt: number) {
             if (dist(e, dest) < 0.18) world.movePath.shift();
           }
         }
-        const dir = aimDirection(world, e);
-        if (Math.hypot(dir.x, dir.z) > 0.03)
-          e.facing = Math.atan2(dir.x, dir.z);
+        world.moveInput =
+          manualActive && manualLength > 0
+            ? { x: manualX / manualLength, z: manualZ / manualLength }
+            : { x: 0, z: 0 };
+        if (e.swing > 0) faceTargetUntil = world.time + FACE_TARGET_HOLD;
+        // 滑鼠：一律面向游標。觸控（自動瞄準）：平常面向移動方向；按著普攻、
+        // 或剛攻擊／施法完的一小段時間面向目標，動作才會朝敵人揮出去。
+        if (!world.autoAim || input.mouseDown || world.time < faceTargetUntil) {
+          const dir = aimDirection(world, e);
+          if (Math.hypot(dir.x, dir.z) > 0.03)
+            e.facing = Math.atan2(dir.x, dir.z);
+        } else if (e.moving && Math.hypot(world.moveInput.x, world.moveInput.z) > 0)
+          e.facing = Math.atan2(world.moveInput.x, world.moveInput.z);
         if (input.mouseDown) attack(world, e);
       }
     } else ai(world, field, e, dt);
@@ -563,6 +585,50 @@ const aimRing = new THREE.Mesh(
 );
 aimRing.rotation.x = -Math.PI / 2;
 scene.add(aimRing);
+
+/**
+ * 觸控拖曳技能時的地面指示：施放範圍的外圈、從角色拉到落點的線，以及落點的圈。
+ * 手指停在取消區上時變成紅色。
+ */
+const castIndicator = new THREE.Group();
+const castColor = new THREE.MeshBasicMaterial({
+  color: 0xecd096,
+  side: THREE.DoubleSide,
+  transparent: true,
+  opacity: 0.8,
+  depthWrite: false,
+  // 平台、坡道比地面高，會把貼地的指示蓋住；瞄準指示一律畫在最上層。
+  depthTest: false,
+});
+const flat = (geometry: THREE.BufferGeometry) => {
+  geometry.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(geometry, castColor);
+  m.renderOrder = 2;
+  castIndicator.add(m);
+  return m;
+};
+flat(new THREE.RingGeometry(CAST_RANGE - 0.22, CAST_RANGE, 64));
+const castLine = flat(new THREE.PlaneGeometry(0.4, 1).translate(0, 0.5, 0));
+const castTarget = flat(new THREE.RingGeometry(1.1, 1.55, 32));
+castIndicator.visible = false;
+scene.add(castIndicator);
+
+function drawCastIndicator() {
+  const aim = input.skillAim,
+    player = world.player;
+  castIndicator.visible = session.state === "playing" && !!aim && !!player && player.hp > 0;
+  if (!castIndicator.visible || !aim || !player) return;
+  castIndicator.position.set(player.x, 0.18, player.z);
+  castColor.color.setHex(aim.cancel ? 0xe0705f : 0xecd096);
+  castLine.visible = castTarget.visible = !!aim.offset;
+  if (!aim.offset) return;
+  const { x, z } = aim.offset;
+  const length = Math.hypot(x, z);
+  // 線的幾何沿 -Z 擺放；轉 θ + π 之後指向 (sin θ, cos θ)。
+  castLine.rotation.y = Math.atan2(x, z) + Math.PI;
+  castLine.scale.set(1, 1, length);
+  castTarget.position.set(x, 0, z);
+}
 function frame(now: number) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - last) / 1000, 0.045);
@@ -593,6 +659,7 @@ function frame(now: number) {
     !input.coarse &&
     (world.player?.hp ?? 0) > 0;
   aimRing.position.set(input.aim.x, 0.17, input.aim.z);
+  drawCastIndicator();
   renderer.render(scene, camera);
   drawLabels(world, session.state);
   drawMap(world, session.state);

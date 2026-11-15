@@ -39,7 +39,15 @@ let coolNodes: HTMLElement[] = [];
  * 依所選英雄重建技能列。
  * @param onCast 點擊或按下技能格時要施放哪一格
  */
-export function buildSkills(world: World, onCast: (slot: number) => void) {
+/**
+ * @param onAim 觸控按下 Q／E／R 時改呼叫它（按住拖曳瞄準，放開才施放）。
+ *   閃避不拖曳：觸控時固定朝搖桿方向，見 core/skills.ts。
+ */
+export function buildSkills(
+  world: World,
+  onCast: (slot: number) => void,
+  onAim?: (slot: number, e: PointerEvent, button: HTMLElement) => void,
+) {
   const h = HEROES[world.player!.hero];
   $("heroBadge").textContent = h.icon;
   $("heroName").textContent = h.name;
@@ -57,7 +65,9 @@ export function buildSkills(world: World, onCast: (slot: number) => void) {
     b.onpointerdown = (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      onCast(Number(b.dataset.skill));
+      const slot = Number(b.dataset.skill);
+      if (onAim && e.pointerType === "touch" && slot < 3) onAim(slot, e, b);
+      else onCast(slot);
     };
     // detail 為 0 代表是鍵盤觸發的 click，指標按下時已經處理過了。
     b.onclick = (e) => {
