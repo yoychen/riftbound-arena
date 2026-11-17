@@ -10,7 +10,8 @@ import * as THREE from "three";
 import type { Obstacle } from "../core/navigation.js";
 import { createRng, TERRAIN_SEED } from "../core/rng.js";
 import { TEAM_COLORS } from "../config/colors.js";
-import { box, cyl, mesh, scene } from "./renderer.js";
+import { discPlatform, rectPlatform } from "./ground.js";
+import { box, mesh, scene } from "./renderer.js";
 import { plantTrees, type TreePlacement } from "./trees.js";
 import { placeGrass, placeRocks, placeTiles, type RockPlacement } from "./props.js";
 import type { Placement } from "./instancing.js";
@@ -87,13 +88,25 @@ for (let i = 0; i <= 100; i++) {
 }
 strip(river, 6, 0x46786e, 0.06);
 strip(river, 4.5, 0x3b9b94, 0.08);
-for (const p of lanePoints.flat().filter((p, i) => i % 4 === 0)) {
-  if (Math.abs(p.z - (-p.x * 0.47 + Math.sin(p.x * 0.12) * 2)) < 4) {
-    box(7.2, 0.24, 2.4, 0x969a79, p.x, 0.2, p.z, mapRoot);
-  }
+// 每條兵線過河處一座橋：一整塊順著兵線方向的橋面，兩端與兩側是窄斜坡。
+// 過河的那一段兵線幾乎是直線，所以用頭尾兩點決定方向就夠了。
+for (const points of lanePoints) {
+  const crossing = points.filter(
+    (p) => Math.abs(p.z - (-p.x * 0.47 + Math.sin(p.x * 0.12) * 2)) < 4,
+  );
+  if (crossing.length < 2) continue;
+  const start = crossing[0],
+    end = crossing[crossing.length - 1];
+  const length = Math.hypot(end.x - start.x, end.z - start.z) + 2.4;
+  const angle = Math.atan2(end.x - start.x, end.z - start.z);
+  const cx = (start.x + end.x) / 2,
+    cz = (start.z + end.z) / 2;
+  const deck = rectPlatform(cx, cz, 7.2, length, angle, { top: 0.32, base: 0, slope: 0.4 });
+  mesh(deck, 0x969a79, cx, 0, cz, mapRoot);
 }
-cyl(8, 8, 0.25, 0x66755b, 0, 0.1, 0, mapRoot, 24);
-cyl(6.9, 6.9, 0.25, 0x4a554b, 0, 0.2, 0, mapRoot, 24);
+// 中央坑：大小、高度都和原本相同，只把邊緣削成一圈窄斜面（見 ground.ts）。
+mesh(discPlatform(0, 0, 7.75, { top: 0.225, base: 0, slope: 0.25 }, 24), 0x66755b, 0, 0, 0, mapRoot);
+mesh(discPlatform(0, 0, 6.75, { top: 0.325, base: 0.225, slope: 0.15 }, 24), 0x4a554b, 0, 0, 0, mapRoot);
 const pitRing = mesh(
   new THREE.TorusGeometry(7.2, 0.13, 5, 40),
   0xc59657,
@@ -175,13 +188,17 @@ const bases = [
   teamColors = TEAM_COLORS;
 for (let team = 0; team < 2; team++) {
   const b = bases[team];
-  cyl(8, 8, 0.4, 0x687e70, b.x, 0.3, b.z, mapRoot, 20);
-  cyl(6.6, 7, 0.3, 0x84978a, b.x, 0.6, b.z, mapRoot, 20);
+  // 基地平台兩層，外輪廓和原本一樣（半徑 8 與 7），只把邊緣削成窄斜面；
+  // 總高度從 0.75 降到 0.5，兩層的比例不變。
+  const lower = discPlatform(b.x, b.z, 7.7, { top: 0.33, base: 0, slope: 0.3 });
+  mesh(lower, 0x687e70, b.x, 0, b.z, mapRoot);
+  const upper = discPlatform(b.x, b.z, 6.6, { top: 0.5, base: 0.33, slope: 0.4 });
+  mesh(upper, 0x84978a, b.x, 0, b.z, mapRoot);
   const ring = mesh(
     new THREE.TorusGeometry(6.4, 0.1, 4, 40),
     teamColors[team],
     b.x,
-    0.81,
+    0.56,
     b.z,
     mapRoot,
     0.5,

@@ -6,6 +6,7 @@
 import type { World } from "../core/world.js";
 import { HEROES } from "../data/heroes.js";
 import { clamp } from "../core/vec.js";
+import { standingHeight } from "./ground.js";
 import { labelCtx as ctx, screen, W, H } from "./renderer.js";
 
 /** 跳出的傷害數字。生命週期由呈現層保管，模擬只送出事件。 */
@@ -49,13 +50,14 @@ export function drawLabels(world: World, state: string) {
     if (e.hp <= 0) continue;
     const p = screen(
       e.x,
-      e.type === "core"
+      standingHeight(e.type, e.x, e.z) +
+      (e.type === "core"
         ? 6
         : e.type === "tower"
           ? 5.4
           : e.type === "boss"
             ? 4.2
-            : 3.1,
+            : 3.1),
       e.z,
     );
     if (!p.visible || p.x < -100 || p.x > W + 100 || p.y < 65 || p.y > H + 20)

@@ -46,6 +46,7 @@ import {
   stepFloaters,
 } from "./render/labels.js";
 import { drawMap } from "./render/minimap.js";
+import { standingHeight } from "./render/ground.js";
 import { clearFeed, showAnnounce, showFeed, tickToast } from "./ui/feed.js";
 import { playTone, resumeAudio, toggleMute } from "./ui/audio.js";
 import { HEROES } from "./data/heroes.js";
@@ -122,7 +123,7 @@ function addUnit(
 ) {
   const e = createUnit(world, type, team, x, z, hero, lane);
   e.model = unitModel(type, team, hero);
-  modelOf(e).position.set(x, 0, z);
+  modelOf(e).position.set(x, standingHeight(type, x, z), z);
   worldEntities.add(modelOf(e));
   return e;
 }
@@ -559,7 +560,12 @@ function syncModels(dt: number) {
       !animated && (e.type === "hero" || e.type === "minion") && e.moving
         ? Math.abs(Math.sin(world.time * 14 + e.id)) * 0.13
         : 0;
-    modelOf(e).position.set(e.x, bob, e.z);
+    // 站上平台時腳底跟著墊高；高度變化用很短的緩動，跨上台階不會瞬移。
+    const model = modelOf(e);
+    const ground = standingHeight(e.type, e.x, e.z);
+    const lastGround = (model.userData.ground as number | undefined) ?? ground;
+    model.userData.ground = lastGround + (ground - lastGround) * Math.min(1, dt * 18);
+    model.position.set(e.x, model.userData.ground + bob, e.z);
     modelOf(e).rotation.y = e.facing;
     modelOf(e).scale.setScalar(e.hit > 0 ? 1.045 : 1);
     if (e.type === "boss") syncRingTeam(modelOf(e), e.team);
