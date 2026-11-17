@@ -12,6 +12,7 @@
 - `src/input/`：鍵盤、滑鼠與觸控。
 - `src/main.ts`：把各層接起來，並跑賽局迴圈。
 - `art/`：Blender 模型的生成腳本與 `.blend` 原始檔；匯出的 `.glb` 在 `src/assets/models/`。
+- `showcase.html`、`src/showcase/`：模型展示頁。可旋轉檢視、播放英雄、小兵與熔岩龜的動作，並與原本程式拼的版本並排比較。開發時在 http://localhost:8080/showcase.html ，build 後一起輸出到 `dist/showcase.html`。
 
 重構的完整過程與各階段決策見 `docs/refactor-plan.md`。
 
@@ -57,11 +58,15 @@ blender --background --factory-startup --python art/build_tree.py
 blender --background --factory-startup --python art/build_rock.py
 blender --background --factory-startup --python art/build_hero_swordsman.py  # 另有 _archer、_mage、_fighter
 blender --background --factory-startup --python art/build_minion.py
+blender --background --factory-startup --python art/build_turtle.py
+blender --background --factory-startup --python art/build_structures.py   # 防禦塔與核心
 ```
 
 沒有 Blender 也可以 `pip install bpy==5.2.4`，改用 `python art/build_<名稱>.py` 執行。英雄腳本設 `HERO_PREVIEW=<路徑>.png` 會另外渲染一張多視角預覽圖（Cycles，CPU 即可）。四位英雄都綁了骨架（骨架與動作工具在 `art/rig.py`），另可設 `HERO_ANIM_PREVIEW=<路徑>.png` 渲染動作檢查圖。
 
-每支腳本會覆寫 `art/<名稱>.blend` 與 `src/assets/models/<名稱>.glb`。共同的匯出約定（1 單位 = 1 公尺、頂點色只帶明暗、碰撞不從模型推算）寫在 `art/lowpoly.py`，各模型的物件名稱與原點寫在各自腳本開頭。
+每支腳本會覆寫 `art/<名稱>.blend` 與 `src/assets/models/<名稱>.glb`。共同的匯出約定（1 單位 = 1 公尺、頂點色只帶明暗、碰撞不從模型推算）寫在 `art/lowpoly.py`，各模型的物件名稱與原點寫在各自腳本開頭。建築腳本一次輸出 `tower.glb` 與 `core.glb`。
+
+有骨架的模型（英雄、小兵、熔岩龜）在遊戲與展示頁都由 `src/render/skeletal.ts` 載入、播放動作；模型還沒載好或載入失敗時，遊戲改用程式拼的舊版本。
 
 ## 輸出靜態網站
 

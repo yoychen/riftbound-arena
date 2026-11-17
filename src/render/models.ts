@@ -9,305 +9,14 @@ import { HEROES } from "../data/heroes.js";
 import { teamColors } from "./terrain.js";
 import { box, cyl, mesh, scene, sphere } from "./renderer.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
-import { loadAnimatedModel, shadedMaterial } from "./instancing.js";
-import swordsmanUrl from "../assets/models/hero_swordsman.glb?url";
-import archerUrl from "../assets/models/hero_archer.glb?url";
-import mageUrl from "../assets/models/hero_mage.glb?url";
-import fighterUrl from "../assets/models/hero_fighter.glb?url";
-import minionUrl from "../assets/models/minion.glb?url";
+import { minionTeamMaterials, riggedTemplate, SkeletalAnimator } from "./skeletal.js";
+import { createStructure } from "./structures.js";
+
+/** 中立單位（尚未被收服的巨獸）的代表色。 */
+const NEUTRAL_COLOR = 0xcf7446;
 
 const worldEntities = new THREE.Group();
 scene.add(worldEntities);
-
-const SKIN = 0xe4c9a0;
-const PANTS = 0x294343;
-const BOOTS = 0x5a4636;
-
-interface HeroModel {
-  url: string;
-  /** .glb 裡的物件名稱 → 色相。模型只帶明暗。 */
-  colors: Record<string, number>;
-  /** 會自己發光的部位（法球）。 */
-  glow?: string[];
-}
-
-/**
- * Blender 建的英雄模型（art/build_hero_*.py），索引與 HEROES 相同。
- * 調色盤集中在這裡；各腳本裡的 PREVIEW_TINTS 只是渲染預覽圖用的副本。
- */
-const HERO_MODELS: HeroModel[] = [
-  {
-    url: swordsmanUrl,
-    colors: {
-      Coat: HEROES[0].color,
-      Skin: SKIN,
-      Dark: PANTS,
-      Boots: BOOTS,
-      Hair: 0x324e4c,
-      Scarf: 0xeef3ea,
-      Blade: 0xdbede3,
-      Gold: 0xcbb477,
-    },
-  },
-  {
-    url: archerUrl,
-    colors: {
-      Tunic: HEROES[1].color,
-      Skin: SKIN,
-      Dark: PANTS,
-      Boots: BOOTS,
-      Hair: 0x8a4b2f,
-      Cloak: 0x3c6650,
-      Leather: 0x7a5236,
-      Bow: 0xe6bc66,
-      String: 0xf0e0b3,
-      Star: 0xfff1b8,
-    },
-  },
-  {
-    url: mageUrl,
-    colors: {
-      Robe: HEROES[2].color,
-      Trim: 0x7d65ab,
-      Skin: SKIN,
-      Dark: PANTS,
-      Hair: 0xdcd6ec,
-      Sash: 0xe0c27a,
-      Shoes: 0x3d3350,
-      Staff: 0xc5b58d,
-      Orb: 0xbea0fc,
-      Moon: 0xf2dc9b,
-    },
-    glow: ["Orb"],
-  },
-  {
-    url: fighterUrl,
-    colors: {
-      Armor: HEROES[3].color,
-      Plate: 0x859890,
-      Stone: 0x9a9282,
-      Skin: SKIN,
-      Dark: PANTS,
-      Boots: BOOTS,
-      Beard: 0x8a5a3a,
-      Shield: 0xc8ac70,
-      Wood: 0x6e6655,
-    },
-  },
-];
-
-/**
- * 已載入的英雄模型。每個英雄只載入一次，場上的每個單位都 clone 一份 ——
- * clone 共用幾何與材質，所以 disposeModel 要跳過標了 `shared` 的網格。
- *
- * 載入是非同步的，unitModel 卻得同步回傳；模型通常在選完英雄前就載好了，
- * 萬一還沒好（或載入失敗），那一隻就先用 unitModel 裡程式拼出來的版本。
- */
-const loadedHeroes = new Map<number, { model: THREE.Object3D; clips: THREE.AnimationClip[] }>();
-HERO_MODELS.forEach(({ url, colors, glow = [] }, hero) => {
-  loadAnimatedModel(url)
-    .then(({ scene: model, animations }) => {
-      model.traverse((o) => {
-        const part = o as THREE.Mesh;
-        if (!part.isMesh) return;
-        const color = colors[part.name];
-        if (color === undefined) throw new Error(`英雄模型的 ${part.name} 沒有對應的顏色`);
-        const material = shadedMaterial(color);
-        if (glow.includes(part.name)) {
-          material.emissive.setHex(color);
-          material.emissiveIntensity = 0.7;
-        }
-        part.material = material;
-        part.castShadow = true;
-        part.receiveShadow = true;
-        part.userData.shared = true;
-      });
-      loadedHeroes.set(hero, { model, clips: animations });
-    })
-    .catch((error) => {
-      console.error(`英雄 ${hero} 的模型載入失敗，改用程式生成的模型`, error);
-    });
-});
-
-/**
- * Blender 建的小兵（art/build_minion.py）。只有兩個網格，場上同時有幾十隻：
- * `Team` 的頂點色只帶明暗，乘上隊伍色；`Gear` 的頂點色本身就帶顏色，用白色材質畫。
- * 兩隊共用同一份幾何與動作，只換 Team 的材質。
- */
-const MINION_TEAM_COLORS = [0x428f99, 0xa95f68];
-const minionTeamMaterials = MINION_TEAM_COLORS.map((color) => shadedMaterial(color));
-let loadedMinion: { model: THREE.Object3D; clips: THREE.AnimationClip[] } | undefined;
-loadAnimatedModel(minionUrl)
-  .then(({ scene: model, animations }) => {
-    const gear = shadedMaterial(0xffffff);
-    model.traverse((o) => {
-      const part = o as THREE.Mesh;
-      if (!part.isMesh) return;
-      if (part.name !== "Team" && part.name !== "Gear") throw new Error(`小兵模型多了 ${part.name} 網格`);
-      part.material = part.name === "Team" ? minionTeamMaterials[0] : gear;
-      part.castShadow = true;
-      part.receiveShadow = true;
-      part.userData.shared = true;
-    });
-    loadedMinion = { model, clips: animations };
-  })
-  .catch((error) => {
-    console.error("小兵的模型載入失敗，改用程式生成的模型", error);
-  });
-
-/** 下半身的骨頭；其餘（Spine 以上與雙手）是上半身。名稱見 art/rig.py。 */
-const LOWER_BODY = /^(Hips|Thigh|Shin|Foot)/;
-
-function bodyHalf(clip: THREE.AnimationClip, lower: boolean): THREE.AnimationClip {
-  return new THREE.AnimationClip(
-    `${clip.name}.${lower ? "lower" : "upper"}`,
-    clip.duration,
-    clip.tracks.filter((t) => LOWER_BODY.test(t.name) === lower),
-  );
-}
-
-/**
- * 英雄與小兵的動作：Idle、Walk、Attack（art/rig.py 與各模型腳本做的）。
- *
- * 上下半身分開混合：下半身只看有沒有在移動（Idle ↔ Walk）；上半身平常跟著
- * 下半身，攻擊時改播 Attack —— 射手邊跑邊射時腳照樣在跑。每組權重加起來都是 1，
- * 混合時才不會被拉回靜止姿勢。
- *
- * 角色面向滑鼠，移動方向卻不一定相同：下半身轉向實際移動的方向，往後移動時
- * 倒退跑（見 steer）。
- *
- * 只讀實體的 moving、swing（普攻時設為 0.18、逐格遞減）、位置與 facing，不碰模擬。
- */
-/** 下半身最多相對上半身扭多少。 */
-const LEG_TWIST = THREE.MathUtils.degToRad(75);
-/** 移動方向偏離面向超過這個角度就改成倒退跑，回到 BACKPEDAL_EXIT 以內才恢復。 */
-const BACKPEDAL_ENTER = THREE.MathUtils.degToRad(110);
-const BACKPEDAL_EXIT = THREE.MathUtils.degToRad(70);
-const tmpQuat = new THREE.Quaternion();
-const tmpYaw = new THREE.Quaternion();
-const tmpUp = new THREE.Vector3();
-
-function wrapAngle(a: number): number {
-  return Math.atan2(Math.sin(a), Math.cos(a));
-}
-
-class SkeletalAnimator {
-  private readonly mixer: THREE.AnimationMixer;
-  private readonly idle: THREE.AnimationAction[];
-  private readonly walk: THREE.AnimationAction[];
-  private readonly attack?: THREE.AnimationAction;
-  private walkWeight = 0;
-  private attackWeight = 0;
-  private lastSwing = 0;
-  /** 動畫原速時腳往後蹬的速度（公尺／秒），art/rig.py 的 walk() 算好存在骨架上。 */
-  private readonly walkSpeed: number;
-  private speed = 0;
-  private last?: { x: number; z: number };
-  /** 最近一次的移動方向（世界座標的角度，與 facing 同一套）。 */
-  private heading = 0;
-  /** 下半身相對上半身轉了多少（弧度）；上半身反向扭回來，繼續面向 facing。 */
-  private legYaw = 0;
-  private backward = false;
-  private readonly hips?: THREE.Object3D;
-  private readonly spine?: THREE.Object3D;
-
-  constructor(root: THREE.Object3D, clips: THREE.AnimationClip[]) {
-    this.mixer = new THREE.AnimationMixer(root);
-    const clip = (name: string) => clips.find((c) => c.name === name);
-    const halves = (name: string) => {
-      const c = clip(name);
-      if (!c) throw new Error(`英雄模型缺少 ${name} 動作`);
-      return [bodyHalf(c, true), bodyHalf(c, false)].map((h) => {
-        const action = this.mixer.clipAction(h);
-        action.play();
-        return action;
-      });
-    };
-    this.walkSpeed = Number(root.getObjectByName("Skeleton")?.userData.walk_speed) || 6;
-    this.hips = root.getObjectByName("Hips");
-    this.spine = root.getObjectByName("Spine");
-    this.idle = halves("Idle");
-    this.walk = halves("Walk");
-    // 每隻英雄的呼吸錯開，站在一起時才不會同步起伏。
-    for (const a of this.idle) a.time = Math.random() * a.getClip().duration;
-    const attack = clip("Attack");
-    if (attack) {
-      this.attack = this.mixer.clipAction(bodyHalf(attack, false));
-      this.attack.setLoop(THREE.LoopOnce, 1);
-      this.attack.clampWhenFinished = true;
-    }
-    this.apply();
-  }
-
-  update(moving: boolean, swing: number, dt: number, x: number, z: number, facing: number) {
-    // 依實際移動速度調整跑步的播放速度：腳往後蹬的速度等於身體前進的速度，
-    // 踩地的腳才不會在地上滑。閃避、被擊退這類瞬間位移不算，夾在合理範圍內。
-    if (this.last && dt > 0) {
-      const dx = x - this.last.x,
-        dz = z - this.last.z;
-      const v = Math.hypot(dx, dz) / dt;
-      this.speed += (v - this.speed) * Math.min(1, dt * 10);
-      if (Math.hypot(dx, dz) > 1e-4) this.heading = Math.atan2(dx, dz);
-    }
-    this.last = { x, z };
-    this.steer(moving, facing, dt);
-    const pace = THREE.MathUtils.clamp(this.speed / this.walkSpeed, 0.6, 2);
-    for (const a of this.walk) a.timeScale = this.backward ? -pace : pace;
-
-    if (this.attack && swing > this.lastSwing + 1e-4) {
-      this.attack.reset().play();
-      this.attackWeight = 1;
-    }
-    this.lastSwing = swing;
-    const attacking =
-      !!this.attack && this.attack.isRunning() && this.attack.time < this.attack.getClip().duration - 0.08;
-    this.walkWeight += ((moving ? 1 : 0) - this.walkWeight) * Math.min(1, dt * 12);
-    this.attackWeight += ((attacking ? 1 : 0) - this.attackWeight) * Math.min(1, dt * 20);
-    this.apply();
-    this.mixer.update(dt);
-    this.twist();
-  }
-
-  /**
-   * 角色面向滑鼠（facing），移動方向卻可以是任何方向。腳要朝實際前進的方向跑，
-   * 否則往後移動時看起來像倒著滑：
-   * - 夾角不大時，下半身轉向移動方向、上半身反向扭回來，最多扭 LEG_TWIST。
-   * - 往後方移動時改成倒退跑（Walk 倒著播），下半身只轉偏離正後方的那一點。
-   * 進入與離開倒退跑的門檻不同，在臨界角度附近才不會來回切換。
-   */
-  private steer(moving: boolean, facing: number, dt: number) {
-    let target = 0;
-    if (moving && this.speed > 0.5) {
-      const rel = wrapAngle(this.heading - facing);
-      const off = Math.abs(rel);
-      if (this.backward ? off < BACKPEDAL_EXIT : off > BACKPEDAL_ENTER) this.backward = !this.backward;
-      target = THREE.MathUtils.clamp(this.backward ? wrapAngle(rel - Math.PI) : rel, -LEG_TWIST, LEG_TWIST);
-    } else this.backward = false;
-    this.legYaw += (target - this.legYaw) * Math.min(1, dt * 10);
-  }
-
-  /** 在動作之上疊加下半身的轉向；動作每格都會重寫骨頭的旋轉，所以不會累積。 */
-  private twist() {
-    if (!this.hips?.parent || !this.spine || Math.abs(this.legYaw) < 1e-3) return;
-    // 「往上」在 Hips 父節點的座標裡是哪個方向
-    this.hips.parent.getWorldQuaternion(tmpQuat);
-    tmpUp.set(0, 1, 0).applyQuaternion(tmpQuat.invert());
-    this.hips.quaternion.premultiply(tmpYaw.setFromAxisAngle(tmpUp, this.legYaw));
-    // 同一個「往上」換到 Hips 自己的座標裡，Spine 反向轉回來
-    tmpUp.applyQuaternion(tmpQuat.copy(this.hips.quaternion).invert());
-    this.spine.quaternion.premultiply(tmpYaw.setFromAxisAngle(tmpUp, -this.legYaw));
-  }
-
-  private apply() {
-    const w = this.walkWeight,
-      a = this.attack ? this.attackWeight : 0;
-    this.idle[0].setEffectiveWeight(1 - w);
-    this.walk[0].setEffectiveWeight(w);
-    this.idle[1].setEffectiveWeight((1 - w) * (1 - a));
-    this.walk[1].setEffectiveWeight(w * (1 - a));
-    this.attack?.setEffectiveWeight(a);
-  }
-}
 
 /**
  * 推進單位的骨架動作。回傳 false 表示這個模型沒有動作（程式拼出來的模型），
@@ -325,10 +34,14 @@ export function animateUnit(
 
 function unitModel(type: string, team: number, hero = 0): THREE.Group {
   const root = new THREE.Group();
-  const c = team < 0 ? 0xcf7446 : teamColors[team];
-  const rigged =
-    type === "hero" ? loadedHeroes.get(hero) : type === "minion" ? loadedMinion : undefined;
-  if (rigged) {
+  const c = team < 0 ? NEUTRAL_COLOR : teamColors[team];
+  const rigged = riggedTemplate(type, hero);
+  // Blender 做的防禦塔與核心（art/build_structures.py），水晶是隊伍色。
+  const structure = type === "tower" || type === "core" ? createStructure(type, c) : null;
+  if (structure) {
+    root.add(structure);
+    root.userData.crystal = structure.userData.crystal;
+  } else if (rigged) {
     // 有骨架的模型要用 SkeletonUtils 複製，骨頭才會接到新的那一份。
     const body = cloneSkinned(rigged.model);
     if (type === "minion")
@@ -483,7 +196,26 @@ function unitModel(type: string, team: number, hero = 0): THREE.Group {
   );
   ring.rotation.x = -Math.PI / 2;
   (ring.material as THREE.Material).side = THREE.DoubleSide;
+  if (type === "boss") {
+    // 巨獸被收服後會換隊，腳下的光環要跟著換色。共用材質不能改色，
+    // 所以給它自己的一份，釋放模型時一併釋放。
+    ring.material = (ring.material as THREE.MeshStandardMaterial).clone();
+    ring.userData.ownMaterial = true;
+    root.userData.ring = ring;
+    root.userData.ringTeam = team;
+  }
   return root;
+}
+
+/** 巨獸換隊時，把腳下光環改成新隊伍的顏色。 */
+export function syncRingTeam(model: THREE.Object3D, team: number): void {
+  const ring = model.userData.ring as THREE.Mesh | undefined;
+  if (!ring || model.userData.ringTeam === team) return;
+  model.userData.ringTeam = team;
+  const color = team < 0 ? NEUTRAL_COLOR : teamColors[team];
+  const material = ring.material as THREE.MeshStandardMaterial;
+  material.color.setHex(color);
+  material.emissive.setHex(color);
 }
 /**
  * 建立單位並掛上模型。
@@ -504,10 +236,10 @@ export function disposeModel(model: unknown, disposeMaterial = false) {
   (model as THREE.Object3D).traverse((o) => {
     // 每份複製各有自己的骨架，骨架的骨頭貼圖要跟著釋放。
     (o as Partial<THREE.SkinnedMesh>).skeleton?.dispose();
-    if (o.userData.shared) return; // 共用的英雄模型，下一場還要用
+    if (o.userData.shared) return; // 共用的 Blender 模型，下一場還要用
     const mesh = o as Partial<THREE.Mesh>;
     mesh.geometry?.dispose();
-    if (disposeMaterial) (mesh.material as THREE.Material | undefined)?.dispose();
+    if (disposeMaterial || o.userData.ownMaterial) (mesh.material as THREE.Material | undefined)?.dispose();
   });
 }
 

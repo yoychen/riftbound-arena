@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>裂境 RIFTBOUND｜模型展示</title>
+    <link rel="stylesheet" href="./src/showcase/showcase.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <aside class="panel" id="panel">
+      <header>
+        <div>
+          <span class="eyebrow">RIFTBOUND · MODEL SHOWCASE</span>
+          <h1>模型展示</h1>
+        </div>
+        <a class="back" href="./">回到遊戲 →</a>
+      </header>
+
+      <nav class="models" id="models" aria-label="選擇模型"></nav>
+
+      <section class="group">
+        <span class="label">版本</span>
+        <div class="segmented" id="versions">
+          <button data-version="blender" class="active">Blender</button>
+          <button data-version="original">原本</button>
+          <button data-version="both">並排比較</button>
+        </div>
+      </section>
+
+      <section class="group" id="clipGroup">
+        <span class="label">動畫</span>
+        <div class="segmented" id="clips"></div>
+      </section>
+
+      <section class="group">
+        <span class="label">檢視</span>
+        <div class="toggles">
+          <label><input type="checkbox" id="spin" checked /> 自動旋轉</label>
+          <label><input type="checkbox" id="wire" /> 線框</label>
+        </div>
+      </section>
+
+      <p class="desc" id="desc"></p>
+
+      <dl class="stats">
+        <div><dt>三角形</dt><dd id="tris">–</dd></div>
+        <div><dt>Draw calls</dt><dd id="calls">–</dd></div>
+      </dl>
+      <p class="hint">拖曳旋轉 · 滾輪或雙指縮放</p>
+    </aside>
+
+    <div class="tag" id="tagLeft"></div>
+    <div class="tag" id="tagRight"></div>
+
+    <script type="module" src="./src/showcase/main.ts"></script>
+  </body>
+</html>

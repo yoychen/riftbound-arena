@@ -6,7 +6,7 @@
     HERO_ANIM_PREVIEW=/path/anim.png python art/build_minion.py
 
 共同的匯出約定見 lowpoly.py，骨架與動作見 rig.py。這個模型的約定
-（src/render/models.ts 依此讀取）：
+（src/render/skeletal.ts 依此讀取）：
 
 - 原點在腳底、朝遊戲的 +Z，身高約 1.45（英雄約 2.5），和原本程式拼出來的小兵
   一樣大，選取光圈不用改。

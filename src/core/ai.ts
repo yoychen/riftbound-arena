@@ -65,12 +65,19 @@ function defendStructure(world: World, entity: Entity, target?: Entity): void {
   );
 }
 
+/**
+ * 巨獸出手時的動作長度（秒）。呈現層看到 swing 從 0 跳上來就播攻擊動畫，
+ * 數值對齊 art/build_turtle.py 的 Attack 片段。
+ */
+const BOSS_SWING = 0.75;
+
 /** 中立巨獸守在巢穴，靠近才反擊。 */
 function guardPit(world: World, entity: Entity, target?: Entity): Point | null {
   if (!target || dist(entity, PIT) >= 7) return PIT;
 
   if (dist(entity, target) < 5 && (entity.attack) <= 0) {
     entity.attack = 2.5;
+    entity.swing = BOSS_SWING;
     addZone(world, entity.x, entity.z, 5, 0.9, entity, 160, 0xf79c65, 0.65);
   }
   return target;
@@ -203,6 +210,7 @@ function siegeDestination(
 
   if ((entity.attack) <= 0) {
     entity.attack = 2.4;
+    entity.swing = BOSS_SWING;
     // 有英雄護送時撞擊威力大幅提升 —— 這是護送巨獸的意義所在。
     const escorted = world.entities.some(
       (u) =>

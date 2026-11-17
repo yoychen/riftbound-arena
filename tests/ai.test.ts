@@ -86,6 +86,16 @@ describe("中立巨獸", () => {
     expect(world.zones[0].dmg).toBe(160);
   });
 
+  it("砸地時標記出手，呈現層據此播攻擊動畫", () => {
+    const world = makeWorld();
+    const boss = spawn(world, "boss", -1, { x: 1, z: 0 });
+    spawn(world, "hero", 0, { x: 3 });
+
+    expect(boss.swing).toBe(0);
+    ai(world, field, boss, DT);
+    expect(boss.swing).toBeGreaterThan(0);
+  });
+
   it("敵人離巢穴太遠就不追", () => {
     const world = makeWorld();
     const boss = spawn(world, "boss", -1, { x: 20, z: 0 });
@@ -236,6 +246,15 @@ describe("攻城巨獸", () => {
 
     ai(world, field, boss, DT);
     expect(ownLane.hp).toBeLessThan(3600);
+  });
+
+  it("撞擊時標記出手，呈現層據此播攻擊動畫", () => {
+    const world = makeWorld();
+    const boss = spawn(world, "boss", 0, { x: 0, z: -20, lane: 0 });
+    spawn(world, "tower", 1, { x: 3, z: -20, lane: 0, hp: 3600, maxHp: 3600 });
+
+    ai(world, field, boss, DT);
+    expect(boss.swing).toBeGreaterThan(0);
   });
 
   it("有英雄護送時撞擊威力大幅提升", () => {

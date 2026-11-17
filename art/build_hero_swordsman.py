@@ -7,13 +7,16 @@
     HERO_PREVIEW=/path/sheet.png python art/build_hero_swordsman.py   # 另外輸出多視角預覽圖
     HERO_ANIM_PREVIEW=/path/anim.png python art/build_hero_swordsman.py  # 動作檢查圖
 
-共同的匯出約定見 lowpoly.py。這個模型的約定（src/render/models.ts 依此讀取）：
+共同的匯出約定見 lowpoly.py。這個模型的約定（src/render/skeletal.ts 依此讀取）：
 
 - 原點在腳底中心（y = 0），角色朝遊戲的 +Z。身高約 2.5，和原本程式拼出來
   的英雄一樣大，選取光圈（半徑 1）不用改。
-- 每種顏色一個物件，物件名稱就是顏色的用途：
-  `Coat`（英雄色）、`Skin`、`Dark`、`Boots`、`Hair`、`Scarf`、`Blade`、`Gold`。
-  實際色相在 models.ts，這裡只有明暗。
+- 兩個物件：
+  - `Coat`：外套與袖子。頂點色只帶明暗，色相是英雄代表色，由遊戲決定
+    （data/heroes.ts，UI 也用同一個顏色）。
+  - `Gear`：其餘所有部位（皮膚、褲子、靴子、頭髮、圍巾、劍身、金飾）。
+    顏色直接烘在頂點色裡（下面的 GEAR_COLORS），遊戲用白色材質畫，
+    在 Blender 裡打開就看得到真正的顏色。
 - 綁了 rig.py 的 16 根骨頭，帶 `Idle`、`Walk`、`Attack` 三個動作。
 
 所有形狀都用 lowpoly.tube 沿路徑一圈一圈拉出來，座標都是遊戲座標
@@ -26,15 +29,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig  # noqa: E402
-from hero_common import along, arm, finish_hero, hair_shell, head, leg_joints, legs, new_parts, v  # noqa: E402
+from hero_common import along, arm, bake_fixed_colors, finish_hero, hair_shell, head, leg_joints, legs, new_parts, v  # noqa: E402
 from lowpoly import tube  # noqa: E402
 from rig import X, Y, Z, bind, bind_by_height, rot  # noqa: E402
 
 rig.enable()
 
-# 遊戲裡的顏色，只用來渲染預覽圖；真正的調色盤在 src/render/models.ts。
-PREVIEW_TINTS = {
-    "Coat": 0x70D5BD,
+# 固定色的唯一來源：匯出時烘進 Gear 的頂點色。
+GEAR_COLORS = {
     "Skin": 0xE4C9A0,
     "Dark": 0x294343,
     "Boots": 0x5A4636,
@@ -43,8 +45,12 @@ PREVIEW_TINTS = {
     "Blade": 0xDBEDE3,
     "Gold": 0xCBB477,
 }
+# 預覽圖用的材質色。Coat 的英雄色只是副本，遊戲裡以 data/heroes.ts 為準；
+# Gear 的顏色在頂點上，材質用白色。
+PREVIEW_TINTS = {"Coat": 0x70D5BD, "Gear": 0xFFFFFF}
 
-parts = new_parts(PREVIEW_TINTS)
+# 建模時仍然每種顏色一個 bmesh，形狀的程式不必知道最後會合併。
+parts = new_parts({"Coat": 0, **GEAR_COLORS})
 
 # 身體依高度在 Hips → Spine → Chest 之間漸變。
 TORSO = [(0.80, "Hips"), (1.10, "Spine"), (1.42, "Chest")]
@@ -162,7 +168,7 @@ def actions(skeleton):
     idle = rig.idle(skeleton)
     walk = rig.walk(skeleton, JOINTS, arm_swing=(0.35, 0.9))  # 握劍的右手擺小一點
     # 普攻：右肩往後收、把劍舉過肩，再從右上往左下斜劈。只動上半身 ——
-    # 遊戲裡攻擊時腳照樣跑或站，見 src/render/models.ts 的 HeroAnimator。遊戲裡每 0.48 秒一刀，動作 0.5 秒。
+    # 遊戲裡攻擊時腳照樣跑或站，見 src/render/skeletal.ts 的 SkeletalAnimator。遊戲裡每 0.48 秒一刀，動作 0.5 秒。
     attack = rig.one_shot(
         skeleton,
         "Attack",
@@ -193,4 +199,5 @@ def actions(skeleton):
 
 
 # ── 收尾 ─────────────────────────────────────────────────
-finish_hero("hero_swordsman", parts, PREVIEW_TINTS, bright=("Blade",), joints=JOINTS, actions=actions)
+gear_colors = bake_fixed_colors(parts, GEAR_COLORS, keep=("Coat",), bright=("Blade",))
+finish_hero("hero_swordsman", parts, PREVIEW_TINTS, joints=JOINTS, actions=actions, vertex_colors={"Gear": gear_colors})

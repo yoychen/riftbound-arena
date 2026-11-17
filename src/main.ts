@@ -24,6 +24,7 @@ import {
   disposeModel,
   animateUnit,
   modelOf,
+  syncRingTeam,
   unitModel,
   worldEntities,
 } from "./render/models.js";
@@ -561,6 +562,7 @@ function syncModels(dt: number) {
     modelOf(e).position.set(e.x, bob, e.z);
     modelOf(e).rotation.y = e.facing;
     modelOf(e).scale.setScalar(e.hit > 0 ? 1.045 : 1);
+    if (e.type === "boss") syncRingTeam(modelOf(e), e.team);
     const crystal = modelOf(e).userData.crystal as THREE.Object3D | undefined;
     if (crystal) {
       crystal.rotation.y = world.time * 0.6;

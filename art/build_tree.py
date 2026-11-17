@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lowpoly import export, finish, game_to_blender, jittered_icosphere, reset_scene, shade_by_height  # noqa: E402
 
 import bmesh  # noqa: E402  （lowpoly 已先載入 bpy）
-from mathutils import Vector  # noqa: E402
+from mathutils import Matrix, Vector  # noqa: E402
 
 # 固定亂數：每次重跑得到同一棵樹。
 rng = random.Random(171)
@@ -44,6 +44,9 @@ SUBDIVISIONS = 1  # 正二十面體；2 是 80 面，作為背景太搶戲
 JITTER = 0.05  # 頂點隨機起伏，佔半徑的比例
 SHADE_LOW = 0.95  # 每團樹冠底部的明暗；1.0 為完全不做漸層
 ROOT_FLARE = 1.1  # 樹幹底部外擴的倍率
+# 樹冠半徑再比原本小一點，讓出畫面給角色。中心位置不變，樹的擺放、
+# 碰撞與樹幹都和原本相同。
+CANOPY_SCALE = 0.95
 
 
 def build_trunk():
@@ -67,8 +70,33 @@ def build_trunk():
     return finish(bm, "Trunk")
 
 
+# three.js 的 IcosahedronGeometry 頂上是一條水平的稜（頂點 (±1, φ, 0)），
+# Blender 的 icosphere 頂上則是一個尖頂點。同樣的半徑，尖頂朝上的那顆
+# 看起來高一截，整片森林的樹因此大了約 6%。把它轉成和原本一樣的擺法。
+PHI = (1 + 5**0.5) / 2
+THREE_EDGE = [game_to_blender(-1, PHI, 0).normalized(), game_to_blender(1, PHI, 0).normalized()]
+
+
+def frame(a, b):
+    """由兩個相鄰頂點的方向建出一組正交基底（矩陣的三個欄）。"""
+    e2 = (b - a * b.dot(a)).normalized()
+    return Matrix((a, e2, a.cross(e2))).transposed()
+
+
+def match_three_orientation(bm):
+    """旋轉 icosphere，讓頂點方向和 three.js 的正二十面體完全重合。"""
+    top = max(bm.verts, key=lambda v: v.co.z)
+    neighbour = top.link_edges[0].other_vert(top)
+    # 起伏只沿半徑方向縮放，所以正規化後就是原本正二十面體的頂點方向。
+    source = frame(top.co.normalized(), neighbour.co.normalized())
+    target = frame(*THREE_EDGE)
+    bmesh.ops.rotate(bm, verts=bm.verts, cent=Vector((0, 0, 0)), matrix=target @ source.transposed())
+
+
 def build_blob(name, cx, cy, cz, r):
+    r *= CANOPY_SCALE
     bm = jittered_icosphere(r, SUBDIVISIONS, JITTER, rng)
+    match_three_orientation(bm)
     shade_by_height(bm, -r, r, SHADE_LOW, 1.0)
     bmesh.ops.translate(bm, verts=bm.verts, vec=game_to_blender(cx, cy, cz))
     return finish(bm, name)

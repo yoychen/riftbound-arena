@@ -315,3 +315,176 @@ def render_preview(path, tints, size=360):
     target, frame = preview_setup(tints, size)
     views = [(0, 8, False), (40, 12, False), (90, 0, False), (180, 8, False), (0, 50, True)]
     save_sheet(path, [render_view(target, frame, *view) for view in views])
+
+
+# ---- 熔岩龜、防禦塔與核心用的小工具 ------------------------------------------
+# 這幾支腳本（build_turtle.py、build_structures.py）用基本形狀拼出零件、
+# 每個零件 100% 綁在一根骨頭上；英雄與小兵的骨架工具在 rig.py。
+
+
+def hex_rgb(color):
+    """0xRRGGBB → (r, g, b)，0–1 的 sRGB 值。"""
+    return (((color >> 16) & 255) / 255, ((color >> 8) & 255) / 255, (color & 255) / 255)
+
+
+def paint(bm, color, low, high, dark=1.0):
+    """把整個 bmesh 塗成一個顏色，並依高度加上明暗：low 處乘 dark、high 處為原色。"""
+    layer = bm.loops.layers.color.get("Col") or bm.loops.layers.color.new("Col")
+    r, g, b = hex_rgb(color)
+    for face in bm.faces:
+        for loop in face.loops:
+            h = min(1.0, max(0.0, (loop.vert.co.z - low) / max(1e-6, high - low)))
+            k = dark + (1.0 - dark) * h
+            loop[layer] = (r * k, g * k, b * k, 1.0)
+
+
+def combine(parts):
+    """
+    把多個 bmesh 合成一個，並記下每一段頂點屬於哪個標籤（例如骨頭名稱）。
+
+    回傳 (合併後的 bmesh, {標籤: [頂點索引, ...]})。各部位原本的 bmesh 會被釋放。
+    """
+    merged = bmesh.new()
+    groups = {}
+    for part, label in parts:
+        start = len(merged.verts)
+        mesh = bpy.data.meshes.new("tmp")
+        part.to_mesh(mesh)
+        part.free()
+        merged.from_mesh(mesh)
+        bpy.data.meshes.remove(mesh)
+        groups.setdefault(label, []).extend(range(start, len(merged.verts)))
+    return merged, groups
+
+
+# ---- 形狀（遊戲座標：+Y 向上、+Z 朝前）---------------------------------------
+
+
+def g(x, y, z):
+    return game_to_blender(x, y, z)
+
+
+def cone(r_bottom, r_top, height, sides, base, direction=(0, 1, 0)):
+    """從 base 沿 direction 長出的錐或柱（r_top = 0 是尖錐）。"""
+    bm = bmesh.new()
+    bmesh.ops.create_cone(
+        bm, cap_ends=True, segments=sides, radius1=r_bottom, radius2=r_top, depth=height
+    )
+    bmesh.ops.translate(bm, verts=bm.verts, vec=Vector((0, 0, height / 2)))
+    axis = g(*direction).normalized()
+    rot = Vector((0, 0, 1)).rotation_difference(axis).to_matrix()
+    bmesh.ops.rotate(bm, verts=bm.verts, cent=Vector((0, 0, 0)), matrix=rot)
+    bmesh.ops.translate(bm, verts=bm.verts, vec=g(*base))
+    return bm
+
+
+def segment(r_bottom, r_top, sides, start, end):
+    """從 start 連到 end 的柱，用來做手臂、弓臂、法杖這類兩端已知的零件。"""
+    s, e = Vector(start), Vector(end)
+    return cone(r_bottom, r_top, (e - s).length, sides, start, tuple(e - s))
+
+
+def blob(radius, scale, center, rng, jitter=0.0, subdivisions=1):
+    """多面球；scale 為遊戲座標的 (x, y, z) 縮放。"""
+    bm = jittered_icosphere(radius, subdivisions, jitter, rng)
+    sx, sy, sz = scale
+    for v in bm.verts:
+        v.co.x *= sx
+        v.co.y *= sz  # 遊戲 z → Blender y
+        v.co.z *= sy  # 遊戲 y → Blender z
+    bmesh.ops.translate(bm, verts=bm.verts, vec=g(*center))
+    return bm
+
+
+def box(size, center, along=(0, 0, 1)):
+    """長方塊。size 為 (寬, 高, 長)，「長」那一軸對齊 along。"""
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    sx, sy, sz = size
+    for v in bm.verts:
+        v.co.x *= sx
+        v.co.y *= sz
+        v.co.z *= sy
+    axis = g(*along).normalized()
+    rot = g(0, 0, 1).rotation_difference(axis).to_matrix()
+    bmesh.ops.rotate(bm, verts=bm.verts, cent=Vector((0, 0, 0)), matrix=rot)
+    bmesh.ops.translate(bm, verts=bm.verts, vec=g(*center))
+    return bm
+
+
+def bounds_z(bm):
+    zs = [v.co.z for v in bm.verts]
+    return min(zs), max(zs)
+
+
+def colored(bm, color, dark=0.82):
+    """依零件自己的高度範圍上色：底部乘 dark、頂部為原色。"""
+    low, high = bounds_z(bm)
+    paint(bm, color, low, high, dark)
+    return bm
+
+
+# ---- 骨架與動畫 -------------------------------------------------------------
+
+
+def armature(name, bones):
+    """
+    bones: [(名稱, 關節位置(遊戲座標), 父骨頭或 None), ...]
+
+    每根骨頭都朝 Blender 的 +Y：靜止姿勢的旋轉因此是單位矩陣，動畫裡
+    繞 X 轉是前後俯仰、繞 Y 轉是左右側傾、繞 Z 轉是水平扭轉，不用換算座標軸。
+    """
+    arm = bpy.data.objects.new(name, bpy.data.armatures.new(name))
+    bpy.context.scene.collection.objects.link(arm)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    edit = arm.data.edit_bones
+    for bone_name, head, parent in bones:
+        b = edit.new(bone_name)
+        b.head = g(*head)
+        b.tail = b.head + Vector((0, 0.3, 0))
+        b.roll = 0
+        if parent:
+            b.parent = edit[parent]
+    bpy.ops.object.mode_set(mode="OBJECT")
+    return arm
+
+
+def skin(name, parts, arm):
+    """把 [(bmesh, 骨頭名稱), ...] 合成一個網格，每個零件 100% 跟著它的骨頭。"""
+    merged, groups = combine(parts)
+    obj = finish(merged, name)
+    for bone, indices in groups.items():
+        obj.vertex_groups.new(name=bone).add(indices, 1.0, "REPLACE")
+    obj.parent = arm
+    obj.modifiers.new("Armature", "ARMATURE").object = arm
+    return obj
+
+
+def clip(arm, name, keys, length, fps=24):
+    """
+    keys: {骨頭: [(秒, 旋轉(x, y, z), 位移(x, y, z)), ...]}，Blender 骨頭空間。
+    沒列出的骨頭在頭尾各打一個靜止關鍵影格，切換動畫時才不會殘留上一段的姿勢。
+    """
+    rest = (0, 0, 0)
+    action = bpy.data.actions.new(name)
+    action.use_fake_user = True
+    arm.animation_data_create()
+    arm.animation_data.action = action
+    for pb in arm.pose.bones:
+        pb.rotation_mode = "XYZ"
+        frames = keys.get(pb.name) or [(0, rest, rest), (length, rest, rest)]
+        for t, rot, loc in frames:
+            pb.rotation_euler = rot
+            pb.location = loc
+            pb.keyframe_insert("rotation_euler", frame=round(t * fps) + 1)
+            pb.keyframe_insert("location", frame=round(t * fps) + 1)
+    return action
+
+
+def rest_pose(arm):
+    """匯出前回到靜止姿勢，模型才不會帶著最後一段動畫的姿勢當預設。"""
+    arm.animation_data.action = None
+    for pb in arm.pose.bones:
+        pb.rotation_euler = (0, 0, 0)
+        pb.location = (0, 0, 0)

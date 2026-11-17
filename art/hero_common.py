@@ -21,6 +21,7 @@ from mathutils import Vector  # noqa: E402
 # 整個角色共用一段由下往上的明暗：腳邊偏暗，像環境光遮蔽。
 SHADE_LOW, SHADE_HIGH = 0.0, 2.5
 SHADE_DARK = 0.78
+BRIGHT_DARK = 0.9  # 金屬、發光物這類 bright 部位的漸層比較淡
 
 
 def v(*p):
@@ -147,13 +148,54 @@ def star_outline(r_out, r_in, points=5):
     ]
 
 
+def bake_fixed_colors(parts, colors, keep, bright=()):
+    """
+    把顏色固定的部位（皮膚、靴子、頭髮、金屬……）合成一個 `Gear` 物件，顏色
+    直接烘進頂點色；keep 裡的部位（英雄色這類由遊戲決定的顏色）維持獨立。
+    一位英雄因此從「每種顏色一次繪製」降到兩、三次，在 Blender 裡打開也看得到
+    真正的顏色。
+
+    colors：{部位: 0xRRGGBB}，固定色的唯一來源 —— 遊戲裡 Gear 用白色材質。
+    bright 裡的部位（金屬、弓弦）明暗漸層比較淡：合併之後這些頂點各自帶著
+    自己的漸層底色，看起來和分開時一樣。（不能把差額乘進顏色：接近白色的
+    部位會超過 1 被截掉。）
+
+    直接改 parts（拿掉合併的部位、加上 Gear），回傳 finish_hero 的
+    vertex_colors 要的 {BMVert: (r, g, b, 漸層底色)}。
+    """
+    from lowpoly import hex_rgb
+
+    gear = bmesh.new()
+    gear.verts.layers.deform.verify()
+    spans = []
+    for part in [p for p in parts if p not in keep]:
+        bm = parts.pop(part)
+        start = len(gear.verts)
+        # 經過 Mesh 轉一手，骨架權重（deform 層）會跟著帶過來。
+        mesh = bpy.data.meshes.new("tmp")
+        bm.to_mesh(mesh)
+        bm.free()
+        gear.from_mesh(mesh)
+        bpy.data.meshes.remove(mesh)
+        spans.append((part, start, len(gear.verts)))
+    gear.verts.ensure_lookup_table()
+    rgb_of = {}
+    for part, start, end in spans:
+        color = (*hex_rgb(colors[part]), BRIGHT_DARK if part in bright else SHADE_DARK)
+        for i in range(start, end):
+            rgb_of[gear.verts[i]] = color
+    parts["Gear"] = gear
+    return rgb_of
+
+
 def finish_hero(name, parts, tints, bright=(), joints=None, actions=None, vertex_colors=None):
     """
     寫入明暗、建立物件、匯出 .glb，有設 HERO_PREVIEW 時另外渲染預覽圖。
     bright 裡的部位（金屬、發光物）明暗漸層比較淡。
 
     vertex_colors：{部位: {BMVert: (r, g, b)}}，讓這些部位的頂點色直接帶顏色
-    （小兵為了少一次繪製才這樣做，見 build_minion.py）。
+    （為了少幾次繪製，見 bake_fixed_colors 與 build_minion.py）。第四個值
+    可以另外指定這個頂點的漸層底色（預設是這個部位的）。
 
     綁骨架的英雄另外傳 joints（rig.humanoid 的結果）與 actions(骨架物件)：
     actions 建好每個動作並回傳 [(動作, 預覽影格)]；設 HERO_ANIM_PREVIEW 時把
@@ -161,16 +203,19 @@ def finish_hero(name, parts, tints, bright=(), joints=None, actions=None, vertex
     """
     objects = []
     for part, bm in parts.items():
-        dark = 0.9 if part in bright else SHADE_DARK
+        dark = BRIGHT_DARK if part in bright else SHADE_DARK
         shade_by_height(bm, SHADE_LOW, SHADE_HIGH, dark, 1.0)
         if vertex_colors and part in vertex_colors:
-            # 例外：這個部位的頂點色直接帶顏色（{BMVert: (r, g, b)}），乘在明暗上。
+            # 例外：這個部位的頂點色直接帶顏色，乘在明暗上。
             rgb_of = vertex_colors[part]
             layer = bm.loops.layers.color["Col"]
             for face in bm.faces:
                 for loop in face.loops:
-                    r, g, b = rgb_of[loop.vert]
+                    r, g, b, *own_dark = rgb_of[loop.vert]
                     shade = loop[layer][0]
+                    if own_dark:
+                        h = min(1.0, max(0.0, (loop.vert.co.z - SHADE_LOW) / (SHADE_HIGH - SHADE_LOW)))
+                        shade = own_dark[0] + (1 - own_dark[0]) * h
                     loop[layer] = (shade * r, shade * g, shade * b, 1.0)
         if joints:
             rig.check_bound(part, bm)

@@ -5,10 +5,10 @@
     HERO_PREVIEW=/path/sheet.png python art/build_hero_archer.py
     HERO_ANIM_PREVIEW=/path/anim.png python art/build_hero_archer.py
 
-約定和逐風劍士相同（見 build_hero_swordsman.py）：原點在腳底、朝 +Z、
-每種顏色一個物件，色相在 src/render/models.ts。物件：
-`Tunic`（英雄色）、`Skin`、`Dark`、`Boots`、`Hair`、`Cloak`、`Leather`、
-`Bow`、`String`、`Star`。綁了 rig.py 的骨架，帶 `Idle`、`Walk`、`Attack`。
+約定和逐風劍士相同（見 build_hero_swordsman.py）：原點在腳底、朝 +Z。物件：
+`Tunic`（英雄色，由遊戲決定）與 `Gear`（其餘部位：皮膚、褲子、靴子、頭髮、
+披肩、皮革、弓、弓弦、晨星，顏色直接烘在頂點色裡，見下面的 GEAR_COLORS）。
+綁了 rig.py 的骨架，帶 `Idle`、`Walk`、`Attack`。
 
 造型：金色短上衣、深色披肩與垂在背後的兜帽、馬尾、背上的箭袋，左手斜握
 一把反曲弓（斜握是為了從遊戲鏡頭往下看時，弓不會只剩一條線），胸前一枚
@@ -21,14 +21,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig  # noqa: E402
-from hero_common import along, arm, finish_hero, flat_shape, hair_shell, head, leg_joints, legs, new_parts, star_outline, v  # noqa: E402
+from hero_common import along, arm, bake_fixed_colors, finish_hero, flat_shape, hair_shell, head, leg_joints, legs, new_parts, star_outline, v  # noqa: E402
 from lowpoly import tube  # noqa: E402
 from rig import X, Y, Z, bind, bind_by_height, rot  # noqa: E402
 
 rig.enable()
 
-PREVIEW_TINTS = {
-    "Tunic": 0xE3C16D,
+# 固定色的唯一來源：匯出時烘進 Gear 的頂點色。
+GEAR_COLORS = {
     "Skin": 0xE4C9A0,
     "Dark": 0x294343,
     "Boots": 0x5A4636,
@@ -39,8 +39,12 @@ PREVIEW_TINTS = {
     "String": 0xF0E0B3,
     "Star": 0xFFF1B8,
 }
+# 預覽圖用的材質色。Tunic 的英雄色只是副本，遊戲裡以 data/heroes.ts 為準；
+# Gear 的顏色在頂點上，材質用白色。
+PREVIEW_TINTS = {"Tunic": 0xE3C16D, "Gear": 0xFFFFFF}
 
-parts = new_parts(PREVIEW_TINTS)
+# 建模時仍然每種顏色一個 bmesh，形狀的程式不必知道最後會合併。
+parts = new_parts({"Tunic": 0, **GEAR_COLORS})
 TORSO = [(0.80, "Hips"), (1.10, "Spine"), (1.42, "Chest")]
 
 # ── 腿：比劍士細一點 ───────────────────────────────────────
@@ -166,4 +170,5 @@ def actions(skeleton):
     return [(idle, [0, 15, 30, 45]), (walk, [0, 2, 4, 6, 8, 10, 12, 14]), (attack, [0, 3, 6, 8])]
 
 
-finish_hero("hero_archer", parts, PREVIEW_TINTS, bright=("Star", "String"), joints=JOINTS, actions=actions)
+gear_colors = bake_fixed_colors(parts, GEAR_COLORS, keep=("Tunic",), bright=("Star", "String"))
+finish_hero("hero_archer", parts, PREVIEW_TINTS, joints=JOINTS, actions=actions, vertex_colors={"Gear": gear_colors})

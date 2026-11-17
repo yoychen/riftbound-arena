@@ -14,7 +14,7 @@
 - 繞 Z（前後軸）：負值讓右手（-X）往外張開，正值讓左手往外張開。
 子骨頭的旋轉疊在父骨頭之上（手臂跟著胸口轉）。
 
-動作名稱（Idle、Walk、Attack）會原樣成為 .glb 裡的動畫名稱，src/render/models.ts
+動作名稱（Idle、Walk、Attack）會原樣成為 .glb 裡的動畫名稱，src/render/skeletal.ts
 依名稱播放。Walk 另外在骨架上留下 `walk_speed`（公尺／秒），遊戲用它讓腳步
 跟上實際的移動速度。
 """

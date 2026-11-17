@@ -5,10 +5,10 @@
     HERO_PREVIEW=/path/sheet.png python art/build_hero_mage.py
     HERO_ANIM_PREVIEW=/path/anim.png python art/build_hero_mage.py
 
-約定和逐風劍士相同（見 build_hero_swordsman.py）：原點在腳底、朝 +Z、
-每種顏色一個物件，色相在 src/render/models.ts。物件：
-`Robe`（英雄色）、`Trim`、`Skin`、`Dark`、`Hair`、`Sash`、`Shoes`、
-`Staff`、`Orb`、`Moon`。`Orb` 在遊戲裡會自己發光。綁了 rig.py 的骨架，
+約定和逐風劍士相同（見 build_hero_swordsman.py）：原點在腳底、朝 +Z。物件：
+`Robe`（英雄色，由遊戲決定）、`Orb`（法球，遊戲裡會自己發光，所以獨立）與
+`Gear`（其餘部位：滾邊、皮膚、頭髮、腰帶、鞋、法杖、新月，顏色直接烘在
+頂點色裡，見下面的 GEAR_COLORS）。綁了 rig.py 的骨架，
 帶 `Idle`、`Walk`、`Attack`；腿藏在袍子裡，袍子的下半部跟著大腿擺。
 
 造型：拖地長袍、喇叭袖、帽尖往後垂的寬沿尖帽、銀白長髮。右手的法杖頂端
@@ -22,14 +22,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig  # noqa: E402
-from hero_common import along, arm, finish_hero, hair_shell, head, leg_joints, new_parts, v  # noqa: E402
+from hero_common import along, arm, bake_fixed_colors, finish_hero, hair_shell, head, leg_joints, new_parts, v  # noqa: E402
 from lowpoly import tube  # noqa: E402
 from rig import X, Y, Z, bind, bind_by_height, bind_skirt, rot  # noqa: E402
 
 rig.enable()
 
-PREVIEW_TINTS = {
-    "Robe": 0xB399EF,
+# 固定色的唯一來源：匯出時烘進 Gear 的頂點色。
+GEAR_COLORS = {
     "Trim": 0x7D65AB,
     "Skin": 0xE4C9A0,
     "Dark": 0x294343,
@@ -37,11 +37,14 @@ PREVIEW_TINTS = {
     "Sash": 0xE0C27A,
     "Shoes": 0x3D3350,
     "Staff": 0xC5B58D,
-    "Orb": 0xBEA0FC,
     "Moon": 0xF2DC9B,
 }
+# 預覽圖用的材質色。Robe 的英雄色只是副本，遊戲裡以 data/heroes.ts 為準；
+# Gear 的顏色在頂點上，材質用白色。
+PREVIEW_TINTS = {"Robe": 0xB399EF, "Gear": 0xFFFFFF, "Orb": 0xBEA0FC}
 
-parts = new_parts(PREVIEW_TINTS)
+# 建模時仍然每種顏色一個 bmesh，形狀的程式不必知道最後會合併。
+parts = new_parts({"Robe": 0, "Orb": 0, **GEAR_COLORS})
 TORSO = [(0.80, "Hips"), (1.10, "Spine"), (1.42, "Chest")]
 WAIST_Y, HEM_Y = 0.85, 0.05
 
@@ -175,4 +178,5 @@ def actions(skeleton):
     return [(idle, [0, 15, 30, 45]), (walk, [0, 2, 4, 6, 8, 10, 12, 14]), (attack, [0, 5, 9, 13])]
 
 
-finish_hero("hero_mage", parts, PREVIEW_TINTS, bright=("Orb", "Moon"), joints=JOINTS, actions=actions)
+gear_colors = bake_fixed_colors(parts, GEAR_COLORS, keep=("Robe", "Orb"), bright=("Moon",))
+finish_hero("hero_mage", parts, PREVIEW_TINTS, bright=("Orb",), joints=JOINTS, actions=actions, vertex_colors={"Gear": gear_colors})
